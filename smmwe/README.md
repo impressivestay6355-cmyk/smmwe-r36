@@ -1,6 +1,6 @@
 # SMM: World Engine
 
-Port by Impressive Stay. Super Mario Maker: World Engine created by Franyer Farías, developed by the SMM:WE team.
+Port by Impressive Stay. SMM:WE created by Franyer Farías, developed by the SMM:WE team.
 
 The game is not included.
 
