@@ -12,7 +12,7 @@ the user's device, into the format the loader reads.
 "Super Mario" and "Super Mario Maker" are trademarks of Nintendo.
 SMM: World Engine is a fan game by its own authors. This project is **not
 affiliated with, sponsored by, or endorsed by** Nintendo or the SMM:WE team.
-It is distributed for interoperability and homebrew purposes only.
+It is provided as is, without any warranty.
 
 ## Online services
 

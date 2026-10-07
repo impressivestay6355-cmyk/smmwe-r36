@@ -8,7 +8,8 @@ using [gmloader-next](https://github.com/PortsMaster/gmloader-next).
 Online play, login, an on-screen keyboard and a pointer for the touch menus
 all work.
 
-The game itself is not included: you bring your own APK. This is a fan
+This repository contains only the loader and port files: no SMM:WE code,
+assets or APKs. You bring your own APK. This is a fan
 project, not affiliated with Nintendo or the SMM:WE team
 (see [LEGAL.md](LEGAL.md)).
 
