@@ -1,0 +1,8 @@
+Put the SMM:WE APK (Android, arm64) here, then start the port.
+
+Both versions work: "Fullscreen" and "Keep Aspect Ratio".
+
+The first launch prepares the game (about one minute, with a progress bar)
+and moves the APK to the "installed" folder. Keep it there: the port uses it
+if the game data ever needs to be rebuilt. To update or switch version,
+put the new APK here again.

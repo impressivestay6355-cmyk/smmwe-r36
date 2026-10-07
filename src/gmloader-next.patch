@@ -1,0 +1,3660 @@
+diff --git a/3rdparty/imgui.mk b/3rdparty/imgui.mk
+new file mode 100644
+index 0000000..3fbb76a
+--- /dev/null
++++ b/3rdparty/imgui.mk
+@@ -0,0 +1,8 @@
++IMGUI_SRC = 3rdparty/imgui/imgui.cpp 3rdparty/imgui/imgui_draw.cpp 3rdparty/imgui/imgui_tables.cpp \
++	3rdparty/imgui/imgui_widgets.cpp 3rdparty/imgui/backends/imgui_impl_opengl3.cpp
++IMGUI_OBJ = $(patsubst %.cpp,build/${ARCH}/%.cpp.o,${IMGUI_SRC})
++IMGUI_FLAGS = -I./3rdparty/imgui -I./3rdparty/imgui/backends -I./gmloader/port_inc -DIMGUI_IMPL_OPENGL_ES2 -DIMGUI_DISABLE_DEMO_WINDOWS -DIMGUI_DISABLE_DEBUG_TOOLS -fvisibility=hidden
++
++build/${ARCH}/3rdparty/imgui/%.cpp.o: 3rdparty/imgui/%.cpp
++	@mkdir -p $(@D)
++	$(CXX) $(IMGUI_FLAGS) $(CXXFLAGS) -c $< -o $@
+diff --git a/3rdparty/libzip-config/zipconf.h b/3rdparty/libzip-config/zipconf.h
+new file mode 120000
+index 0000000..1d86c14
+--- /dev/null
++++ b/3rdparty/libzip-config/zipconf.h
+@@ -0,0 +1 @@
++zipconf.aarch64-linux-gnu.h
+\ No newline at end of file
+diff --git a/Makefile.gmloader b/Makefile.gmloader
+index f87282b..5f31910 100755
+--- a/Makefile.gmloader
++++ b/Makefile.gmloader
+@@ -3,7 +3,7 @@ CROSS ?= ${ARCH}-
+ CC := ${CROSS}gcc
+ CXX := ${CROSS}g++
+ LD := ${CROSS}ld
+-PKG_CONFIG := ${CROSS}pkg-config
++PKG_CONFIG ?= pkg-config
+ 
+ BUILD_DATE = $(shell date +"%Y%m%d_%H%M%S")
+ GIT_BRANCH = ${GITHUB_REF_NAME}
+@@ -21,14 +21,14 @@ LIBS:=\
+ 	-lrt \
+ 	-ldl \
+ 	$(shell ${PKG_CONFIG} sdl2 --libs) \
+-	$(shell ${PKG_CONFIG} zlib --libs)
++	$(shell ${PKG_CONFIG} zlib --libs) ${EXTRA_LIBS}
+ 
+ # General compilation flags
+ OPTM?=-Os
+ COMMONFLAGS:=-Wno-strict-aliasing -Werror=return-type -I. -I./thunks/ -I./loader/ -I./gmloader/ -I./build/${ARCH}/thunks/libc -I./jni/ -I./3rdparty/json/include -I./3rdparty/stb -I./3rdparty/lua -I./3rdparty/libzip/lib ${OPTM} -MMD
+ CFLAGS:=$(shell ${PKG_CONFIG} sdl2 --cflags) ${COMMONFLAGS}
+ CXXFLAGS:=-std=gnu++2a -fuse-cxa-atexit $(shell ${PKG_CONFIG} sdl2 --cflags) ${COMMONFLAGS}
+-LDFLAGS:=${OPTM} -Wl,--gc-sections -Wl,--defsym,BUILD_DATE_$(BUILD_DATE)=0 -Wl,--defsym,GIT_HASH_$(GITHUB_SHA)=0 -Wl,--defsym,GIT_BRANCH_$(GIT_BRANCH_FRIENDLY)=0
++LDFLAGS:=${OPTM} -Wl,--gc-sections -Wl,--defsym,BUILD_DATE_$(BUILD_DATE)=0 -Wl,--defsym,GIT_HASH_$(GITHUB_SHA)=0 -Wl,--defsym,GIT_BRANCH_$(GIT_BRANCH_FRIENDLY)=0 ${EXTRA_LDFLAGS}
+ 
+ # General pre-processing flags
+ LLVM_FILE?=
+@@ -94,11 +94,13 @@ clean:
+ # Include subprojects for 3rdparty libraries and their relevant flags
+ -include 3rdparty/libbsd.mk
+ -include 3rdparty/libzip.mk
++-include 3rdparty/imgui.mk
++CXXFLAGS += -I./3rdparty/imgui -I./3rdparty/imgui/backends -DIMGUI_IMPL_OPENGL_ES2 $(shell ${PKG_CONFIG} libcurl --cflags 2>/dev/null)
+ 
+ # By repeating the generated headers on this rule, we force them to start building
+ # as soon as possible, so libc_table.cpp isn't waiting forever.
+-build/${ARCH}/gmloader/gmloadernext.${DEVICE_ARCH}: ${LIBC_TABS} $(BSD_OBJ) $(LUA_OBJ) $(ZIP_OBJ) $(FMODSDL_OBJ) $(KIT_OBJ) $(OBJ)
+-	$(CXX) $(LDFLAGS) -o $@ $(OBJ) $(LUA_OBJ) $(ZIP_OBJ) $(FMODSDL_OBJ) $(KIT_OBJ) $(BSD_OBJ) $(LIBS)
++build/${ARCH}/gmloader/gmloadernext.${DEVICE_ARCH}: ${LIBC_TABS} $(BSD_OBJ) $(LUA_OBJ) $(ZIP_OBJ) $(FMODSDL_OBJ) $(KIT_OBJ) $(IMGUI_OBJ) $(OBJ)
++	$(CXX) $(LDFLAGS) -o $@ $(OBJ) $(IMGUI_OBJ) $(LUA_OBJ) $(ZIP_OBJ) $(FMODSDL_OBJ) $(KIT_OBJ) $(BSD_OBJ) $(LIBS)
+ 
+ build/${ARCH}/%.cpp.o: %.cpp
+ 	@mkdir -p $(@D)
+diff --git a/gmloader/classes/RunnerJNILib.cpp b/gmloader/classes/RunnerJNILib.cpp
+index 0ccb55d..ce0467c 100755
+--- a/gmloader/classes/RunnerJNILib.cpp
++++ b/gmloader/classes/RunnerJNILib.cpp
+@@ -8,6 +8,7 @@
+ #include "libyoyo.h"
+ #include "jni/classes/bytebuffer.h"
+ #include "video.h"
++#include "port_jni.h"
+ 
+ #define MANGLED_CLASSPATH "Java_com_yoyogames_runner_RunnerJNILib_"
+ #define CLASS RunnerJNILib
+@@ -220,6 +221,7 @@ const ManagedMethod RunnerJNILibManagedMethods[] = {
+     REGISTER_STATIC_METHOD(RunnerJNILib, VideoIsLooping, "()D"),
+     REGISTER_STATIC_METHOD(RunnerJNILib, VideoGetVolume, "()D"),
+     #endif // VIDEO_SUPPORT
++    PORT_MANAGED_METHODS,
+     NULL
+ };
+ 
+diff --git a/gmloader/input.cpp b/gmloader/input.cpp
+index 5b535f1..04d2707 100644
+--- a/gmloader/input.cpp
++++ b/gmloader/input.cpp
+@@ -7,6 +7,7 @@
+ #include "so_util.h"
+ #include "libyoyo.h"
+ #include "configuration.h"
++#include "port.h"
+ 
+ int app_in_focus = 0;
+ int mouse_has_warped = 0;
+@@ -167,10 +168,69 @@ static void keyboard_set_key(SDL_Keycode key, int state)
+     }
+ }
+ 
++/* Keys typed on the on-screen keyboard: pressed for one frame, released on
++   the next one, so keyboard_check_pressed() sees them. */
++static int inj_queue[64];
++static int inj_count = 0;
++static int inj_release[64];
++static int inj_release_count = 0;
++void input_inject_key(int vk, int ch)
++{
++    int key = vk;
++    if (key == 0) {
++        if (ch >= 'a' && ch <= 'z') key = ch - 'a' + 'A';
++        else if ((ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == ' ') key = ch;
++        else if (ch == 8) key = vk_backspace;
++    }
++    if (key > 0 && key < N_KEYS && inj_count < 64)
++        inj_queue[inj_count++] = key;
++}
++
++static void apply_injected_keys()
++{
++    for (int i = 0; i < inj_release_count; i++)
++        keyboard_set_key_raw(inj_release[i], 0);
++    inj_release_count = 0;
++    for (int i = 0; i < inj_count; i++) {
++        keyboard_set_key_raw(inj_queue[i], 1);
++        inj_release[inj_release_count++] = inj_queue[i];
++    }
++    inj_count = 0;
++}
++
++/* keyboard_key_press/release() from the game (this game turns the gamepad
++   into keys with them, every frame while a button is held). As on Android,
++   they are queued and applied at the start of the next frame: "pressed" and
++   "released" only on a real change, so Key Press events (e.g. START = Enter
++   = pause) fire once and are not cleared before the game sees them. */
++static int gk_key[256];
++static unsigned char gk_down[256];
++static int gk_count = 0;
+ ABI_ATTR void RegisterAndroidKeyEvent(int state, int key)
+ {
+-    keyboard_set_key_raw(key, state ? 0 : 1);
+-    printf("RegisterAndroidKeyEvent(%d, %d)\n", state, key);
++    if (key > 0 && key < N_KEYS && gk_count < 256) {
++        gk_key[gk_count] = key;
++        gk_down[gk_count] = state ? 0 : 1;
++        gk_count++;
++    }
++}
++
++static void apply_game_keys()
++{
++    for (int i = 0; i < gk_count; i++) {
++        int key = gk_key[i];
++        int down = gk_down[i];
++        if (down) {
++            if (!_IO_KeyDown[key]) _IO_KeyPressed[key] = 1;
++            _IO_KeyDown[key] = 1;
++            *_IO_CurrentKey = key;
++        } else {
++            if (_IO_KeyDown[key]) _IO_KeyReleased[key] = 1;
++            _IO_KeyDown[key] = 0;
++            if (*_IO_CurrentKey == key) *_IO_CurrentKey = -1;
++        }
++    }
++    gk_count = 0;
+ }
+ 
+ // This hook disabled the majority of the input code, leaving this up to be implemented
+@@ -190,6 +250,9 @@ void patch_input(so_module *mod)
+ {
+     hook_symbol(mod, "_Z23RegisterAndroidKeyEventii", (uintptr_t)&RegisterAndroidKeyEvent, 1);
+     hook_symbol(mod, "_Z23RegisterAndroidKeyEventiiii", (uintptr_t)&RegisterAndroidKeyEvent, 1);
++    /* newer runners: keyboard_key_press/release() go through the 5-argument
++       version, whose queue is only read by the IO_Start_Step replaced above */
++    hook_symbol(mod, "_Z23RegisterAndroidKeyEventiiiii", (uintptr_t)&RegisterAndroidKeyEvent, 1);
+     hook_symbol(mod, "_Z13IO_Start_Stepv", (uintptr_t)&IO_Start_Step_hook, 1);
+ }
+ 
+@@ -202,6 +265,8 @@ int update_inputs(SDL_Window *win)
+     memset(_IO_KeyReleased, 0, N_KEYS);
+ 
+     *_IO_LastKey = *_IO_CurrentKey;
++    apply_injected_keys();
++    apply_game_keys();
+     // Other events (keyboard, gamepad hotplug, etc)
+     SDL_Event ev;
+ 
+@@ -227,6 +292,8 @@ int update_inputs(SDL_Window *win)
+ 
+     int evs = 0;
+     while (SDL_PollEvent(&ev)) {
++        if (ui_handle_event(&ev))
++            continue;
+         switch (ev.type) {
+         case SDL_CONTROLLERDEVICEADDED:
+             if(gmloader_config.disable_controller == 1){
+@@ -304,6 +371,21 @@ int update_inputs(SDL_Window *win)
+ 
+     // Synchronize gamepad<->yoyogamepad states
+     SDL_GameControllerUpdate();
++    {
++        SDL_GameController *first = NULL;
++        for (int i = 0; i < ARRAY_SIZE(sdl_controllers); i++) {
++            if (sdl_controllers[i].controller && sdl_controllers[i].slot == 0) {
++                first = sdl_controllers[i].controller;
++                break;
++            }
++        }
++        int ww, wh;
++        SDL_GetWindowSize(win, &ww, &wh);
++        ui_update(first, ww, wh);
++        if (ui_quit_requested())
++            return 0;
++    }
++    const bool ui_pad = ui_capture_pad();
+     for (int i = 0; i < ARRAY_SIZE(sdl_controllers); i++) {
+         controller_t *controller = &sdl_controllers[i];
+         int slot = controller->slot;
+@@ -356,13 +438,16 @@ int update_inputs(SDL_Window *win)
+             SDL_GameControllerRumble(controller->controller, left_motor, right_motor, duration_ms);
+         }
+ 
++        if (ui_pad)
++            memset(new_states, 0, sizeof(new_states));
++
+         for (int j = 0; j < ARRAY_SIZE(yoyo_gamepads[slot].buttons); j++) {
+             // down -> held or up -> cleared
+             yoyo_gamepads[slot].buttons[j] = (double)update_button(new_states[j], (int)yoyo_gamepads[slot].buttons[j]);
+         }
+ 
+         k = 0;
+-        if (gmloader_config.disable_joystick) {
++        if (gmloader_config.disable_joystick || ui_pad) {
+             yoyo_gamepads[slot].axis[k++] = 0.0;
+             yoyo_gamepads[slot].axis[k++] = 0.0;
+             yoyo_gamepads[slot].axis[k++] = 0.0;
+@@ -378,6 +463,9 @@ int update_inputs(SDL_Window *win)
+     // Mouse Code
+     int x, y;
+     Uint32 mouse_state = SDL_GetMouseState(&x, &y);
++    if (ui_pointer_active())
++        ui_pointer_state(&x, &y, &mouse_state);
++    port_map_mouse(&x, &y);
+ 
+     memset(_IO_ButtonDown, 0, N_BUTTONS);
+     memset(_IO_ButtonPressed, 0, N_BUTTONS);
+diff --git a/gmloader/main.cpp b/gmloader/main.cpp
+index 4132bb4..e865ff2 100755
+--- a/gmloader/main.cpp
++++ b/gmloader/main.cpp
+@@ -1,3 +1,6 @@
++#include <thread>
++#include <unistd.h>
++#include "port.h"
+ #include <SDL2/SDL.h>
+ #include <stdio.h>
+ #include <string.h>
+@@ -235,6 +238,7 @@ int main(int argc, char *argv[])
+     patch_steam(&libyoyo);
+     patch_texture(&libyoyo);
+     patch_lua(&libyoyo);
++    port_init(env, &libyoyo);
+ 
+     int *ms_freq = NULL;
+     if (has_al)
+@@ -300,6 +304,7 @@ int main(int argc, char *argv[])
+     // functions using the GLAD generated headers.
+     load_egl_funcs();
+     load_gles2_funcs();
++    ui_init(sdl_win);
+ 
+     int cont = 1;
+     int w, h;
+@@ -314,6 +319,8 @@ int main(int argc, char *argv[])
+ 
+     RunnerJNILib::Startup(env, 0, apk_path_arg, save_dir_arg, pkg_dir_arg, 4, 0);
+     setup_ended = 1;
++    port_after_startup();
++
+ 
+     while (cont != 0 && cont != 2 && RunnerJNILib_MoveTaskToBackCalled == 0 && relaunch_flag == 0) {
+         #ifdef VIDEO_SUPPORT
+@@ -322,9 +329,31 @@ int main(int argc, char *argv[])
+         if (update_inputs(sdl_win) != 1)
+             break;
+         SDL_GetWindowSize(sdl_win, &w, &h);
+-        cont = RunnerJNILib::Process(env, 0, w, h, 0, 0, 0, 0, 0, 60);
+-        if (RunnerJNILib::canFlip(env, 0))
++        port_frame_begin();
++        int gw, gh;
++        port_game_size(w, h, &gw, &gh);
++        cont = RunnerJNILib::Process(env, 0, gw, gh, 0, 0, 0, 0, 0, 60);
++        if (RunnerJNILib::canFlip(env, 0)) {
++            ui_draw(w, h);
+             SDL_GL_SwapWindow(sdl_win);
++        }
++    }
++
++    if (!relaunch_flag) {
++        /* Quit (SELECT+START or game_end): leave right away. The runner's
++           threads (audio mixer, streams) and static destructors can hang on
++           exit and leave a black screen, so only the display is released,
++           with a watchdog, and the process ends with _exit(). */
++        printf("[port] exiting\n");
++        fflush(stdout);
++        fflush(stderr);
++        std::thread([] { SDL_Delay(2500); fprintf(stderr, "[port] exit watchdog\n"); _exit(0); }).detach();
++        SDL_GL_DeleteContext(sdl_ctx);
++        SDL_DestroyWindow(sdl_win);
++        SDL_QuitSubSystem(SDL_INIT_VIDEO);
++        fflush(stdout);
++        fflush(stderr);
++        _exit(0);
+     }
+ 
+     SDL_GL_DeleteContext(sdl_ctx);
+diff --git a/gmloader/port.h b/gmloader/port.h
+new file mode 100644
+index 0000000..3670373
+--- /dev/null
++++ b/gmloader/port.h
+@@ -0,0 +1,60 @@
++#pragma once
++/*
++ * Handheld port layer: Java extension emulation, HTTP, dialogs, on-screen
++ * keyboard, gamepad pointer and display options.
++ */
++#include <SDL2/SDL.h>
++#include <string>
++#include "jni.h"
++#include "so_util.h"
++
++/* -- port_ext.cpp -------------------------------------------------------- */
++void port_init(JNIEnv *env, so_module *yoyo);      /* after modules are loaded  */
++void port_after_startup();                          /* after RunnerJNILib::Startup */
++void port_frame_begin();                            /* main thread, before Process */
++const std::string &port_storage_root();             /* "internal storage" root */
++const std::string &port_files_dir();                /* getExternalFilesDir()    */
++bool port_network_up();
++
++/* Async results delivered to the runner (main thread only). */
++void port_input_result(const char *text, int ok, int id);
++void port_login_result(const char *user, const char *pass, int id);
++void port_vk_status(bool visible, int height);
++void port_vk_text(const std::string &utf8);
++void port_key_event(int down, int keycode, int ch);
++void port_filepicker_result(const std::string &path);
++
++/* -- port_ui.cpp ---------------------------------------------------------- */
++enum port_dialog_kind {
++    PD_NONE = 0,
++    PD_INPUT,       /* get_string_async            */
++    PD_LOGIN,       /* get_login_async             */
++    PD_MESSAGE,     /* show_message_async          */
++    PD_QUESTION,    /* show_question_async         */
++    PD_FILEPICK,    /* FilePicker extension        */
++    PD_INFO,        /* port message (e.g. URL)     */
++};
++
++void ui_init(SDL_Window *win);
++void ui_open_dialog(port_dialog_kind kind, int id, const char *caption,
++                    const char *text1, const char *text2, const char *filter);
++void ui_vk_toggle(bool show, const std::string &initial, bool from_game);
++bool ui_vk_visible();
++int  ui_vk_height();
++void ui_vk_set_text(const std::string &utf8);
++
++/* Input routing. Returns true when the overlay consumes the pad this frame. */
++bool ui_capture_pad();
++void ui_update(SDL_GameController *pad, int win_w, int win_h);
++bool ui_handle_event(const SDL_Event *ev);
++void ui_draw(int win_w, int win_h);
++
++/* Gamepad pointer (right stick). */
++bool ui_pointer_active();
++void ui_pointer_state(int *x, int *y, Uint32 *buttons);
++
++/* Keep aspect ratio (PORT_KEEP_ASPECT=1). */
++void port_game_size(int win_w, int win_h, int *gw, int *gh);
++void port_map_mouse(int *x, int *y);
++bool ui_quit_requested();
++float port_fps();
+diff --git a/gmloader/port_ext.cpp b/gmloader/port_ext.cpp
+new file mode 100644
+index 0000000..a18a8a6
+--- /dev/null
++++ b/gmloader/port_ext.cpp
+@@ -0,0 +1,1241 @@
++/*
++ * Handheld port layer for GameMaker Android games (gmloader-next).
++ *
++ *  - Java extension emulation (RunnerJNILib.CallExtensionFunction) for the
++ *    extensions shipped in the APK (storage folders, file picker, sharing).
++ *  - HTTP/HTTPS for http_get / http_post_string / http_request (libcurl +
++ *    mbedTLS), results delivered as the Android runner does.
++ *  - get_string_async / get_login_async / show_message_async /
++ *    show_question_async and the virtual keyboard, drawn by port_ui.cpp.
++ *  - Display option: keep aspect ratio (option_scale).
++ */
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <errno.h>
++#include <unistd.h>
++#include <pthread.h>
++#include <ifaddrs.h>
++#include <net/if.h>
++#include <netinet/in.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++
++#include <string>
++#include <vector>
++#include <deque>
++#include <mutex>
++#include <condition_variable>
++#include <functional>
++
++#include <curl/curl.h>
++#include <SDL2/SDL.h>
++
++#include "platform.h"
++#include "so_util.h"
++#include "jni.h"
++#include "jni_internals.h"
++#include "libyoyo.h"
++#include "classes/RunnerJNILib.h"
++#include "jni/classes/lang.h"
++#include "port.h"
++#include "port_jni.h"
++
++#define LOG(...) do { fprintf(stderr, "[port] " __VA_ARGS__); } while (0)
++
++/* ------------------------------------------------------------------------ */
++/* Globals                                                                  */
++/* ------------------------------------------------------------------------ */
++/* URLs in log.txt: no query string (tokens, signatures, user data) */
++static std::string log_url(const std::string &u)
++{
++    size_t q = u.find('?');
++    return q == std::string::npos ? u : u.substr(0, q) + "?...";
++}
++
++static JNIEnv *g_env = NULL;
++static so_module *g_yoyo = NULL;
++static std::string g_storage_root;   /* Android "internal storage" (/sdcard)  */
++static std::string g_files_dir;      /* getExternalFilesDir(null)              */
++static std::string g_import_dir;     /* files offered by the file picker       */
++static std::string g_ca_file;
++static int *g_option_scale = NULL;
++static int g_keep_aspect = 0;
++static char *g_io_input_string = NULL;
++static int *g_io_last_char = NULL;
++
++typedef void (*n_HttpResult_t)(JNIEnv *, jclass, jbyteArray, jint, jint, jstring, jstring);
++typedef void (*n_HttpResultString_t)(JNIEnv *, jclass, jstring, jint, jint);
++typedef void (*n_InputResult_t)(JNIEnv *, jclass, jstring, jint, jint);
++typedef void (*n_LoginResult_t)(JNIEnv *, jclass, jstring, jstring, jint);
++typedef void (*n_VKStatus_t)(JNIEnv *, jclass, jstring, jint);
++typedef void (*n_VKText_t)(JNIEnv *, jclass, jintArray, jint);
++typedef void (*n_KeyEvent_t)(JNIEnv *, jclass, jint, jint, jint, jint, jint);
++
++static n_HttpResult_t       n_HttpResult = NULL;
++static n_HttpResultString_t n_HttpResultString = NULL;
++static n_InputResult_t      n_InputResult = NULL;
++static n_LoginResult_t      n_LoginResult = NULL;
++static n_VKStatus_t         n_VKStatus = NULL;
++static n_VKText_t           n_VKText = NULL;
++static n_KeyEvent_t         n_KeyEvent = NULL;
++
++#include "configuration.h"
++extern "C" const char *port_save_dir_cstr(void) { return gmloader_config.save_dir.c_str(); }
++
++const std::string &port_storage_root() { return g_storage_root; }
++const std::string &port_files_dir() { return g_files_dir; }
++
++static void mkdir_p(const std::string &path)
++{
++    std::string cur;
++    size_t i = 0;
++    while (i <= path.size()) {
++        size_t j = path.find('/', i);
++        if (j == std::string::npos) j = path.size();
++        cur = path.substr(0, j);
++        if (!cur.empty())
++            mkdir(cur.c_str(), 0755);
++        i = j + 1;
++    }
++}
++
++static std::string env_or(const char *name, const std::string &def)
++{
++    const char *v = getenv(name);
++    return (v && *v) ? std::string(v) : def;
++}
++
++static std::string cwd()
++{
++    char buf[4096];
++    if (getcwd(buf, sizeof(buf)) == NULL)
++        return ".";
++    return buf;
++}
++
++/* JNI helpers (this JNI never frees; release what we allocate ourselves). */
++static String *mkstr(const char *s)
++{
++    return new String(s ? s : "");
++}
++
++static void freestr(String *s)
++{
++    if (!s) return;
++    ::free(s->str);
++    delete s;
++}
++
++static ArrayObject *mkbytes(const void *data, size_t len)
++{
++    ArrayObject *a = (ArrayObject *)calloc(1, sizeof(ArrayObject));
++    a->count = (jsize)len;
++    a->element_size = 1;
++    a->elements = malloc(len ? len : 1);
++    if (len) memcpy(a->elements, data, len);
++    return a;
++}
++
++static ArrayObject *mkints(const std::vector<int> &v)
++{
++    ArrayObject *a = (ArrayObject *)calloc(1, sizeof(ArrayObject));
++    a->count = (jsize)v.size();
++    a->element_size = sizeof(jint);
++    a->elements = calloc(v.size() ? v.size() : 1, sizeof(jint));
++    if (!v.empty()) memcpy(a->elements, v.data(), v.size() * sizeof(jint));
++    return a;
++}
++
++static void freearr(ArrayObject *a)
++{
++    if (!a) return;
++    ::free(a->elements);
++    ::free(a);
++}
++
++static const char *jstr(jstring s)
++{
++    return s ? ((String *)s)->str : "";
++}
++
++/* UTF-8 <-> code points */
++static std::vector<int> utf8_to_cp(const std::string &s)
++{
++    std::vector<int> out;
++    for (size_t i = 0; i < s.size();) {
++        unsigned char c = s[i];
++        int cp, n;
++        if (c < 0x80) { cp = c; n = 1; }
++        else if ((c >> 5) == 6) { cp = c & 0x1f; n = 2; }
++        else if ((c >> 4) == 14) { cp = c & 0x0f; n = 3; }
++        else if ((c >> 3) == 30) { cp = c & 0x07; n = 4; }
++        else { i++; continue; }
++        if (i + n > s.size()) break;
++        for (int k = 1; k < n; k++) cp = (cp << 6) | (s[i + k] & 0x3f);
++        out.push_back(cp);
++        i += n;
++    }
++    return out;
++}
++
++static std::string cp_to_utf8(const jint *cp, int n)
++{
++    std::string s;
++    for (int i = 0; i < n; i++) {
++        unsigned c = (unsigned)cp[i];
++        if (c == 0) break;
++        if (c < 0x80) s += (char)c;
++        else if (c < 0x800) { s += (char)(0xc0 | (c >> 6)); s += (char)(0x80 | (c & 0x3f)); }
++        else if (c < 0x10000) { s += (char)(0xe0 | (c >> 12)); s += (char)(0x80 | ((c >> 6) & 0x3f)); s += (char)(0x80 | (c & 0x3f)); }
++        else { s += (char)(0xf0 | (c >> 18)); s += (char)(0x80 | ((c >> 12) & 0x3f)); s += (char)(0x80 | ((c >> 6) & 0x3f)); s += (char)(0x80 | (c & 0x3f)); }
++    }
++    return s;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Main-thread task queue (results from worker threads)                     */
++/* ------------------------------------------------------------------------ */
++static std::mutex g_main_mtx;
++static std::deque<std::function<void()>> g_main_tasks;
++
++static void run_on_main(std::function<void()> fn)
++{
++    std::lock_guard<std::mutex> lk(g_main_mtx);
++    g_main_tasks.push_back(std::move(fn));
++}
++
++/* ------------------------------------------------------------------------ */
++/* HTTP                                                                     */
++/* ------------------------------------------------------------------------ */
++struct HttpJob {
++    int id;
++    std::string url, method, headers;
++    std::vector<char> body;
++};
++
++static std::mutex g_http_mtx;
++static std::condition_variable g_http_cv;
++static std::deque<HttpJob> g_http_jobs;
++static int g_http_threads = 0;
++
++static size_t http_write(char *ptr, size_t sz, size_t nm, void *ud)
++{
++    std::vector<char> *v = (std::vector<char> *)ud;
++    v->insert(v->end(), ptr, ptr + sz * nm);
++    return sz * nm;
++}
++
++static size_t http_header(char *ptr, size_t sz, size_t nm, void *ud)
++{
++    std::string *h = (std::string *)ud;
++    std::string line(ptr, sz * nm);
++    while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
++        line.pop_back();
++    if (line.empty())
++        return sz * nm;
++    if (line.compare(0, 5, "HTTP/") == 0) {
++        /* new response (redirect): restart the header list */
++        *h = "nokey: " + line + "\n";
++    } else {
++        *h += line + "\n";
++    }
++    return sz * nm;
++}
++
++static void http_run(HttpJob &job)
++{
++    std::vector<char> data;
++    std::string rheaders;
++    long status = 0;
++    char err[CURL_ERROR_SIZE] = {0};
++
++    CURL *c = curl_easy_init();
++    if (!c) {
++        int id = job.id;
++        run_on_main([id]() {
++            String *s = mkstr("IOException");
++            if (n_HttpResultString) n_HttpResultString(g_env, NULL, (jstring)s, 404, id);
++            freestr(s);
++        });
++        return;
++    }
++
++    struct curl_slist *hl = NULL;
++    size_t p = 0;
++    while (p < job.headers.size()) {
++        size_t e = job.headers.find_first_of("\r\n", p);
++        if (e == std::string::npos) e = job.headers.size();
++        std::string line = job.headers.substr(p, e - p);
++        if (line.find(':') != std::string::npos)
++            hl = curl_slist_append(hl, line.c_str());
++        p = e + 1;
++    }
++    /* Java's HttpURLConnection does not send "Expect: 100-continue" */
++    hl = curl_slist_append(hl, "Expect:");
++
++    curl_easy_setopt(c, CURLOPT_URL, job.url.c_str());
++    curl_easy_setopt(c, CURLOPT_HTTPHEADER, hl);
++    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
++    curl_easy_setopt(c, CURLOPT_MAXREDIRS, 8L);
++    curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L);
++    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 15L);
++    curl_easy_setopt(c, CURLOPT_TIMEOUT, 120L);
++    curl_easy_setopt(c, CURLOPT_LOW_SPEED_LIMIT, 1L);
++    curl_easy_setopt(c, CURLOPT_LOW_SPEED_TIME, 30L);
++    curl_easy_setopt(c, CURLOPT_ACCEPT_ENCODING, "");
++    curl_easy_setopt(c, CURLOPT_USERAGENT, "Dalvik/2.1.0 (Linux; U; Android 11; Handheld)");
++    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, http_write);
++    curl_easy_setopt(c, CURLOPT_WRITEDATA, &data);
++    curl_easy_setopt(c, CURLOPT_HEADERFUNCTION, http_header);
++    curl_easy_setopt(c, CURLOPT_HEADERDATA, &rheaders);
++    curl_easy_setopt(c, CURLOPT_ERRORBUFFER, err);
++    if (!g_ca_file.empty())
++        curl_easy_setopt(c, CURLOPT_CAINFO, g_ca_file.c_str());
++    if (getenv("PORT_HTTP_INSECURE") && atoi(getenv("PORT_HTTP_INSECURE"))) {
++        curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 0L);
++        curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 0L);
++    }
++
++    const std::string &m = job.method;
++    if (m == "GET") {
++        curl_easy_setopt(c, CURLOPT_HTTPGET, 1L);
++    } else if (m == "HEAD") {
++        curl_easy_setopt(c, CURLOPT_NOBODY, 1L);
++    } else {
++        if (m != "POST")
++            curl_easy_setopt(c, CURLOPT_CUSTOMREQUEST, m.c_str());
++        curl_easy_setopt(c, CURLOPT_POST, 1L);
++        curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)job.body.size());
++        curl_easy_setopt(c, CURLOPT_POSTFIELDS, job.body.empty() ? "" : job.body.data());
++    }
++
++    CURLcode rc = curl_easy_perform(c);
++    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &status);
++    char *eff = NULL;
++    curl_easy_getinfo(c, CURLINFO_EFFECTIVE_URL, &eff);
++    std::string final_url = eff ? eff : job.url;
++    curl_slist_free_all(hl);
++    curl_easy_cleanup(c);
++
++    int id = job.id;
++    if (rc != CURLE_OK) {
++        LOG("http %d %s %s failed: %s (%s)\n", id, m.c_str(), log_url(job.url).c_str(), curl_easy_strerror(rc), err);
++        const char *what = (rc == CURLE_OPERATION_TIMEDOUT) ? "HTTP request timed out" : "IOException";
++        std::string w = what;
++        run_on_main([id, w]() {
++            String *s = mkstr(w.c_str());
++            if (n_HttpResultString) n_HttpResultString(g_env, NULL, (jstring)s, 404, id);
++            freestr(s);
++        });
++        return;
++    }
++
++    LOG("http %d %s %s -> %ld (%zu bytes)\n", id, m.c_str(), log_url(job.url).c_str(), status, data.size());
++    if (data.empty())
++        data.push_back(0);
++    run_on_main([id, status, data, final_url, rheaders]() {
++        ArrayObject *arr = mkbytes(data.data(), data.size());
++        String *u = mkstr(final_url.c_str());
++        String *h = mkstr(rheaders.c_str());
++        if (n_HttpResult) n_HttpResult(g_env, NULL, (jbyteArray)arr, (jint)status, id, (jstring)u, (jstring)h);
++        freearr(arr);
++        freestr(u);
++        freestr(h);
++    });
++}
++
++static void *http_worker(void *)
++{
++    for (;;) {
++        HttpJob job;
++        {
++            std::unique_lock<std::mutex> lk(g_http_mtx);
++            g_http_cv.wait(lk, [] { return !g_http_jobs.empty(); });
++            job = std::move(g_http_jobs.front());
++            g_http_jobs.pop_front();
++        }
++        http_run(job);
++    }
++    return NULL;
++}
++
++static void http_queue(HttpJob job)
++{
++    /* testing aid: PORT_HTTP_REWRITE="https://from=http://to" */
++    const char *rw = getenv("PORT_HTTP_REWRITE");
++    if (rw && strchr(rw, '=')) {
++        std::string r(rw), from = r.substr(0, r.find('=')), to = r.substr(r.find('=') + 1);
++        if (job.url.compare(0, from.size(), from) == 0)
++            job.url = to + job.url.substr(from.size());
++    }
++    std::lock_guard<std::mutex> lk(g_http_mtx);
++    if (g_http_threads == 0) {
++        curl_global_init(CURL_GLOBAL_DEFAULT);
++        const curl_version_info_data *vi = curl_version_info(CURLVERSION_NOW);
++        LOG("http: libcurl %s, %s, CA file '%s'\n", vi->version, vi->ssl_version ? vi->ssl_version : "no TLS", g_ca_file.c_str());
++    }
++    /* up to 4 parallel requests; low-priority threads keep the game smooth */
++    if (g_http_threads < 4 && g_http_threads <= (int)g_http_jobs.size()) {
++        pthread_t t;
++        pthread_attr_t at;
++        pthread_attr_init(&at);
++        pthread_attr_setstacksize(&at, 512 * 1024);
++        pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
++        if (pthread_create(&t, &at, http_worker, NULL) == 0)
++            g_http_threads++;
++        pthread_attr_destroy(&at);
++    }
++    g_http_jobs.push_back(std::move(job));
++    g_http_cv.notify_one();
++}
++
++/* ------------------------------------------------------------------------ */
++/* Network status                                                           */
++/* ------------------------------------------------------------------------ */
++bool port_network_up()
++{
++    struct ifaddrs *ifa = NULL, *i;
++    bool up = false;
++    if (getifaddrs(&ifa) != 0)
++        return true; /* unknown: let the game try */
++    for (i = ifa; i; i = i->ifa_next) {
++        if (!i->ifa_addr || (i->ifa_flags & IFF_LOOPBACK) || !(i->ifa_flags & IFF_UP))
++            continue;
++        if (i->ifa_addr->sa_family == AF_INET || i->ifa_addr->sa_family == AF_INET6) {
++            up = true;
++            break;
++        }
++    }
++    freeifaddrs(ifa);
++    return up;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Results to the runner (main thread)                                      */
++/* ------------------------------------------------------------------------ */
++void port_input_result(const char *text, int ok, int id)
++{
++    LOG("InputResult(ok=%d, id=%d)\n", ok, id);
++    String *s = mkstr(text);
++    if (n_InputResult) n_InputResult(g_env, NULL, (jstring)s, ok, id);
++    freestr(s);
++}
++
++void port_login_result(const char *user, const char *pass, int id)
++{
++    LOG("LoginResult(id=%d)\n", id);
++    String *u = mkstr(user), *p = mkstr(pass);
++    if (n_LoginResult) n_LoginResult(g_env, NULL, (jstring)u, (jstring)p, id);
++    freestr(u);
++    freestr(p);
++}
++
++void port_vk_status(bool visible, int height)
++{
++    String *s = mkstr(visible ? "visible" : "hidden");
++    if (n_VKStatus) n_VKStatus(g_env, NULL, (jstring)s, height);
++    freestr(s);
++}
++
++void port_vk_text(const std::string &utf8)
++{
++    /* keyboard_string, as the Android IME does */
++    std::vector<int> cp = utf8_to_cp(utf8);
++    if (n_VKText) {
++        int len = (int)cp.size();
++        if (cp.empty()) cp.push_back(0);
++        ArrayObject *a = mkints(cp);
++        n_VKText(g_env, NULL, (jintArray)a, len);
++        freearr(a);
++    } else if (g_io_input_string) {
++        size_t n = utf8.size() > 1023 ? 1023 : utf8.size();
++        memcpy(g_io_input_string, utf8.data(), n);
++        g_io_input_string[n] = 0;
++    }
++}
++
++extern void input_inject_key(int vk, int ch);
++void port_key_event(int down, int keycode, int ch)
++{
++    (void)down;
++    (void)keycode;
++    /* Enter / Backspace become key presses; text goes to keyboard_string
++       (letters are not sent as keys, they could trigger game controls). */
++    if (ch == 13) input_inject_key(13, 13);
++    else if (ch == 8) input_inject_key(8, 8);
++    else if (g_io_last_char && ch > 0 && ch < 256) *g_io_last_char = ch;
++}
++
++const char *port_keyboard_string()
++{
++    return g_io_input_string;
++}
++
++void port_filepicker_result(const std::string &path)
++{
++    /* Same sequence as the APK's FilePicker: copy the file to
++       <files>/_temp, then report its display name. */
++    int m = CreateDsMap(0);
++    dsMapAddString(m, "type", "filepickerstart");
++    dsMapAddString(m, "result", "");
++    CreateAsynEventWithDSMap(m, 70);
++
++    std::string name;
++    if (!path.empty()) {
++        std::string dst = g_files_dir + "/_temp";
++        FILE *in = fopen(path.c_str(), "rb");
++        FILE *out = in ? fopen(dst.c_str(), "wb") : NULL;
++        if (in && out) {
++            char buf[65536];
++            size_t n;
++            while ((n = fread(buf, 1, sizeof(buf), in)) > 0)
++                fwrite(buf, 1, n, out);
++            size_t sl = path.find_last_of('/');
++            name = (sl == std::string::npos) ? path : path.substr(sl + 1);
++        }
++        if (in) fclose(in);
++        if (out) fclose(out);
++        LOG("file picker: '%s' -> '%s'\n", path.c_str(), name.c_str());
++    }
++
++    m = CreateDsMap(0);
++    dsMapAddString(m, "type", "filepicker");
++    dsMapAddString(m, "result", name.c_str());
++    CreateAsynEventWithDSMap(m, 70);
++}
++
++/* ------------------------------------------------------------------------ */
++/* Java extensions                                                          */
++/* ------------------------------------------------------------------------ */
++struct ExtArg {
++    bool is_str;
++    double d;
++    std::string s;
++};
++
++static jobject ret_d(double v) { return (jobject)JDouble::make(v); }
++static jobject ret_s(const std::string &s) { return (jobject)mkstr(s.c_str()); }
++
++static jobject ext_dispatch(const std::string &cls, const std::string &meth, const std::vector<ExtArg> &a)
++{
++    auto S = [&](size_t i) -> std::string { return i < a.size() ? (a[i].is_str ? a[i].s : std::to_string((long long)a[i].d)) : std::string(); };
++
++    /* PickMe: folders inside the "internal storage" */
++    if (meth == "getDire1" || meth == "getDire2" || meth == "getDire3" || meth == "getDire4") {
++        int n = meth[7] - '0';
++        std::string p = g_storage_root;
++        for (int i = 0; i < n; i++)
++            p += "/" + S(i);
++        mkdir_p(p);
++        return ret_s(p);
++    }
++    if (meth.compare(0, 3, "Chk") == 0)               /* permission checks */
++        return ret_d(1.0);
++    if (meth == "getExternalStorageDir" || meth == "GetExternalStorageDir")
++        return ret_s(g_files_dir);
++    if (meth == "IsKitKat")
++        return ret_d(1.0);
++    if (meth == "ShowFilePicker" || meth == "ShowFilePickerSwe") {
++        ui_open_dialog(PD_FILEPICK, 0, meth == "ShowFilePicker" ? "Import (.zip)" : "Import a file",
++                       g_import_dir.c_str(), "", meth == "ShowFilePicker" ? ".zip" : "");
++        return NULL;
++    }
++    if (meth == "share_file") {
++        LOG("share_file('%s') ignored on this device\n", S(0).c_str());
++        return NULL;
++    }
++    if (meth == "osNotice" || meth == "WriteExtStor" || meth == "MountFile" || meth == "ReadExtStor")
++        return NULL;
++
++    LOG("extension %s.%s(%zu args) not emulated\n", cls.c_str(), meth.c_str(), a.size());
++    return NULL;
++}
++
++jobject PortJNI::CallExtensionFunction5(JNIEnv *env, jclass clz, jstring cls, jstring meth, jint argc, jdoubleArray dargs, jobjectArray oargs)
++{
++    std::vector<ExtArg> a;
++    ArrayObject *d = (ArrayObject *)dargs, *o = (ArrayObject *)oargs;
++    for (int i = 0; i < argc; i++) {
++        ExtArg e = {false, 0.0, ""};
++        Object *obj = (o && i < o->count) ? ((Object **)o->elements)[i] : NULL;
++        if (obj) {
++            Class *c = obj->_getClass();
++            if (c == &String::clazz) { e.is_str = true; e.s = ((String *)obj)->str; }
++            else if (c == &JDouble::clazz) { e.d = ((JDouble *)obj)->value; }
++        } else if (d && i < d->count) {
++            e.d = ((double *)d->elements)[i];
++        }
++        a.push_back(e);
++    }
++    return ext_dispatch(jstr(cls), jstr(meth), a);
++}
++
++jobject PortJNI::CallExtensionFunction4(JNIEnv *env, jclass clz, jstring cls, jstring meth, jint argc, jobjectArray oargs)
++{
++    std::vector<ExtArg> a;
++    ArrayObject *o = (ArrayObject *)oargs;
++    for (int i = 0; i < argc; i++) {
++        ExtArg e = {false, 0.0, ""};
++        Object *obj = (o && i < o->count) ? ((Object **)o->elements)[i] : NULL;
++        if (obj) {
++            Class *c = obj->_getClass();
++            if (c == &String::clazz) { e.is_str = true; e.s = ((String *)obj)->str; }
++            else if (c == &JDouble::clazz) { e.d = ((JDouble *)obj)->value; }
++        }
++        a.push_back(e);
++    }
++    return ext_dispatch(jstr(cls), jstr(meth), a);
++}
++
++/* ------------------------------------------------------------------------ */
++/* RunnerJNILib Java methods                                                */
++/* ------------------------------------------------------------------------ */
++void PortJNI::HttpGet(JNIEnv *env, jclass clz, jstring url, jint id)
++{
++    HttpJob j;
++    j.id = id; j.url = jstr(url); j.method = "GET";
++    http_queue(std::move(j));
++}
++
++void PortJNI::HttpPost(JNIEnv *env, jclass clz, jstring url, jstring body, jint id)
++{
++    HttpJob j;
++    j.id = id; j.url = jstr(url); j.method = "POST";
++    const char *b = jstr(body);
++    j.body.assign(b, b + strlen(b));
++    j.headers = "Content-Type: application/x-www-form-urlencoded";
++    http_queue(std::move(j));
++}
++
++void PortJNI::HttpRequest(JNIEnv *env, jclass clz, jstring url, jstring method, jstring headers, jbyteArray body, jint id)
++{
++    HttpJob j;
++    j.id = id; j.url = jstr(url); j.method = jstr(method); j.headers = jstr(headers);
++    for (auto &ch : j.method) ch = toupper(ch);
++    if (j.method.empty()) j.method = "GET";
++    ArrayObject *b = (ArrayObject *)body;
++    if (b && b->count > 0 && b->elements) {
++        const char *p = (const char *)b->elements;
++        size_t n = (size_t)b->count;
++        /* the runner passes strings with their terminating zero */
++        if (n > 0 && p[n - 1] == 0) n--;
++        j.body.assign(p, p + n);
++    }
++    http_queue(std::move(j));
++}
++
++jstring PortJNI::InputString(JNIEnv *env, jclass clz, jstring caption, jstring def)
++{
++    /* blocking variant (get_string): not possible here, return the default */
++    return (jstring)mkstr(jstr(def));
++}
++
++void PortJNI::InputStringAsync(JNIEnv *env, jclass clz, jstring caption, jstring def, jint id)
++{
++    ui_open_dialog(PD_INPUT, id, jstr(caption), jstr(def), "", "");
++}
++
++void PortJNI::ShowLogin(JNIEnv *env, jclass clz, jstring user, jstring pass, jint id)
++{
++    ui_open_dialog(PD_LOGIN, id, "Login", jstr(user), jstr(pass), "");
++}
++
++void PortJNI::ShowMessage(JNIEnv *env, jclass clz, jstring msg)
++{
++    LOG("show_message: %s\n", jstr(msg));
++    ui_open_dialog(PD_INFO, -1, jstr(msg), "", "", "");
++}
++
++void PortJNI::ShowMessageAsync(JNIEnv *env, jclass clz, jstring msg, jint id)
++{
++    ui_open_dialog(PD_MESSAGE, id, jstr(msg), "", "", "");
++}
++
++jint PortJNI::ShowQuestion(JNIEnv *env, jclass clz, jstring msg)
++{
++    return 1;
++}
++
++void PortJNI::ShowQuestionAsync(JNIEnv *env, jclass clz, jstring msg, jint id)
++{
++    ui_open_dialog(PD_QUESTION, id, jstr(msg), "", "", "");
++}
++
++void PortJNI::VirtualKeyboardToggle(JNIEnv *env, jclass clz, jboolean show, jint type, jint ret, jint autocap, jboolean predictive, jintArray text)
++{
++    std::string init;
++    ArrayObject *a = (ArrayObject *)text;
++    if (a && a->elements)
++        init = cp_to_utf8((const jint *)a->elements, a->count);
++    ui_vk_toggle(show != 0, init, true);
++}
++
++jboolean PortJNI::VirtualKeyboardGetStatus(JNIEnv *env, jclass clz)
++{
++    return ui_vk_visible() ? JNI_TRUE : JNI_FALSE;
++}
++
++jint PortJNI::VirtualKeyboardGetHeight(JNIEnv *env, jclass clz)
++{
++    return ui_vk_visible() ? ui_vk_height() : 0;
++}
++
++void PortJNI::OnKeyboardStringSet(JNIEnv *env, jclass clz, jintArray text)
++{
++    ArrayObject *a = (ArrayObject *)text;
++    std::string s;
++    if (a && a->elements)
++        s = cp_to_utf8((const jint *)a->elements, a->count);
++    ui_vk_set_text(s);
++}
++
++void PortJNI::OpenURL(JNIEnv *env, jclass clz, jstring url)
++{
++    LOG("url_open: %s\n", log_url(jstr(url)).c_str());
++    std::string m = std::string("This device has no web browser.\nOpen this address on a phone or PC:\n\n") + jstr(url);
++    ui_open_dialog(PD_INFO, -1, m.c_str(), "", "", "");
++}
++
++jboolean PortJNI::isNetworkConnected(JNIEnv *env, jclass clz)
++{
++    return port_network_up() ? JNI_TRUE : JNI_FALSE;
++}
++
++/* Android services the runner asks for */
++static JObject g_asset_manager;   /* any non-null object: AAssetManager_fromJava ignores it */
++static std::string g_clipboard;
++
++jobject PortJNI::GetAssetManager(JNIEnv *env, jclass clz) { return (jobject)&g_asset_manager; }
++jobject PortJNI::LoadDynamicAsset(JNIEnv *env, jclass clz, jstring path) { return NULL; }
++jint PortJNI::DynamicAssetExists(JNIEnv *env, jclass clz, jstring path) { return 0; }
++jint PortJNI::CheckPermission(JNIEnv *env, jclass clz, jstring perm) { return 0; /* granted */ }
++jint PortJNI::UsingGL2(JNIEnv *env, jclass clz) { return 1; }
++jint PortJNI::GetDefaultFrameBuffer(JNIEnv *env, jclass clz) { return 0; }
++
++jstring PortJNI::GetUDID(JNIEnv *env, jclass clz)
++{
++    /* stable per installation, like ANDROID_ID */
++    static std::string id;
++    if (id.empty()) {
++        std::string f = g_files_dir + "/.device_id";
++        FILE *fp = fopen(f.c_str(), "r");
++        char buf[64] = {0};
++        if (fp) { if (fgets(buf, sizeof(buf), fp)) id = buf; fclose(fp); }
++        while (!id.empty() && (id.back() == '\n' || id.back() == '\r')) id.pop_back();
++        if (id.size() != 16) {
++            FILE *r = fopen("/dev/urandom", "rb");
++            unsigned char b[8] = {0};
++            if (r) { if (fread(b, 1, 8, r) != 8) {} fclose(r); }
++            char hex[17];
++            for (int i = 0; i < 8; i++) snprintf(hex + i * 2, 3, "%02x", b[i]);
++            id = hex;
++            fp = fopen(f.c_str(), "w");
++            if (fp) { fprintf(fp, "%s\n", id.c_str()); fclose(fp); }
++        }
++    }
++    return (jstring)mkstr(id.c_str());
++}
++
++jstring PortJNI::clipboardGetText(JNIEnv *env, jclass clz)
++{
++    if (SDL_HasClipboardText()) {
++        char *t = SDL_GetClipboardText();
++        if (t && *t) { g_clipboard = t; }
++        if (t) SDL_free(t);
++    }
++    return (jstring)mkstr(g_clipboard.c_str());
++}
++
++void PortJNI::clipboardSetText(JNIEnv *env, jclass clz, jstring text)
++{
++    g_clipboard = jstr(text);
++    SDL_SetClipboardText(g_clipboard.c_str());
++}
++
++jboolean PortJNI::clipboardHasText(JNIEnv *env, jclass clz)
++{
++    return (!g_clipboard.empty() || SDL_HasClipboardText()) ? JNI_TRUE : JNI_FALSE;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Init / per frame                                                         */
++/* ------------------------------------------------------------------------ */
++/* PORT_DEBUG_KEYS=1: log which keyboard keys the game code reads */
++struct KeyCaller { uintptr_t ra; unsigned char keys[3][256]; int nkeys; };
++static KeyCaller key_callers[64];
++static int key_ncallers = 0;
++static uintptr_t yoyo_base = 0;
++static void key_log(int t, int k, uintptr_t ra)
++{
++    if (k < 0 || k > 255) return;
++    int i;
++    for (i = 0; i < key_ncallers; i++) if (key_callers[i].ra == ra) break;
++    if (i == key_ncallers) { if (key_ncallers >= 64) return; key_callers[i].ra = ra; key_ncallers++; }
++    KeyCaller &c = key_callers[i];
++    if (c.keys[t][k]) return;
++    c.keys[t][k] = 1;
++    if (++c.nkeys > 24) return;   /* key scanners (vk_anykey etc.) */
++    LOG("game reads key %d (%s) from +0x%lx\n", k, t == 0 ? "held" : (t == 1 ? "pressed" : "released"), (unsigned long)(ra - yoyo_base));
++}
++ABI_ATTR static int dbg_key_down(int k) { key_log(0, k, (uintptr_t)__builtin_return_address(0)); return (k >= 0 && k <= 255) ? _IO_KeyDown[k] != 0 : 0; }
++ABI_ATTR static int dbg_key_pressed(int k) { key_log(1, k, (uintptr_t)__builtin_return_address(0)); return (k >= 0 && k <= 255) ? _IO_KeyPressed[k] != 0 : 0; }
++ABI_ATTR static int dbg_key_released(int k) { key_log(2, k, (uintptr_t)__builtin_return_address(0)); return (k >= 0 && k <= 255) ? _IO_KeyReleased[k] != 0 : 0; }
++
++void port_init(JNIEnv *env, so_module *yoyo)
++{
++    if (getenv("PORT_DEBUG_KEYS")) {
++        yoyo_base = (uintptr_t)so_symbol(yoyo, "_Z11IO_Key_Downi") - 0x103a2f0;
++        hook_symbol(yoyo, "_Z11IO_Key_Downi", (uintptr_t)&dbg_key_down, 1);
++        hook_symbol(yoyo, "_Z14IO_Key_Pressedi", (uintptr_t)&dbg_key_pressed, 1);
++        hook_symbol(yoyo, "_Z15IO_Key_Releasedi", (uintptr_t)&dbg_key_released, 1);
++    }
++    g_env = env;
++    std::string here = cwd();
++    g_storage_root = env_or("PORT_STORAGE", here + "/storage");
++    g_files_dir = env_or("PORT_FILES", here + "/files");
++    g_import_dir = env_or("PORT_IMPORT", here + "/import");
++    mkdir_p(g_storage_root);
++    mkdir_p(g_files_dir);
++    mkdir_p(g_import_dir);
++
++    g_ca_file = env_or("PORT_CA_FILE", "");
++    if (g_ca_file.empty()) {
++        const char *cands[] = {"cacert.pem", "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/cert.pem"};
++        for (const char *c : cands) {
++            if (access(c, R_OK) == 0) {
++                g_ca_file = (c[0] == '/') ? std::string(c) : here + "/" + c;
++                break;
++            }
++        }
++    }
++
++#define NAT(var, name) var = (decltype(var))so_symbol(yoyo, "Java_com_yoyogames_runner_RunnerJNILib_" name); \
++    if (!var) LOG("native " name " not found\n");
++    NAT(n_HttpResult, "HttpResult");
++    NAT(n_HttpResultString, "HttpResultString");
++    NAT(n_InputResult, "InputResult");
++    NAT(n_LoginResult, "LoginResult");
++    NAT(n_VKStatus, "OnVirtualKeyboardStatus");
++    NAT(n_VKText, "OnVirtualKeyboardTextInserted");
++    NAT(n_KeyEvent, "KeyEvent");
++#undef NAT
++
++    g_option_scale = (int *)so_symbol(yoyo, "option_scale");
++    g_io_input_string = (char *)so_symbol(yoyo, "_IO_InputString");
++    g_io_last_char = (int *)so_symbol(yoyo, "_IO_LastChar");
++
++    g_yoyo = yoyo;
++    const char *ka = getenv("PORT_KEEP_ASPECT");
++    g_keep_aspect = (ka && atoi(ka)) ? 1 : 0;
++    LOG("storage=%s files=%s import=%s aspect=%s\n", g_storage_root.c_str(), g_files_dir.c_str(),
++        g_import_dir.c_str(), g_keep_aspect ? "keep" : "full");
++}
++
++/* gmloader-next's SDL gamepad implementation (gamepad.cpp) */
++extern ABI_ATTR void gamepad_is_supported(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_get_device_count(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_is_connected(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_get_description(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_get_button_threshold(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_set_button_threshold(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_axis_count(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_axis_value(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_button_check(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_button_check_pressed(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_button_check_released(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_button_count(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_button_value(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_set_vibration(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_set_axis_deadzone(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_get_axis_deadzone(RValue *, void *, void *, int, RValue *);
++extern ABI_ATTR void gamepad_set_colour(RValue *, void *, void *, int, RValue *);
++
++/* The runner's built-in function table: the_functions -> {name, fn, argc}.
++   YYC code calls built-ins by index, and the Android runner registers its own
++   gamepad functions (fed by Android input events that never arrive here):
++   point every gamepad_* entry to the loader's SDL implementation. */
++struct RunnerFunc { const char *name; routine_t fn; int argc; int pad; };
++
++/* PORT_DEBUG_PAD=1: log the gamepad buttons the game asks for (once each) */
++static bool dbg_seen[3][32];
++template <int N>
++ABI_ATTR static void dbg_gp(RValue *ret, void *self, void *other, int argc, RValue *args)
++{
++    static const routine_t real[3] = {gamepad_button_check, gamepad_button_check_pressed, gamepad_button_check_released};
++    if (argc >= 2) {
++        int b = YYGetInt32(args, 1);
++        if (b >= 32769) b -= 32769;
++        if (b >= 0 && b < 32 && !dbg_seen[N][b]) {
++            dbg_seen[N][b] = true;
++            LOG("game reads pad %d button %d (%s)\n", YYGetInt32(args, 0), b, N == 0 ? "held" : (N == 1 ? "pressed" : "released"));
++        }
++    }
++    real[N](ret, self, other, argc, args);
++}
++/* PORT_TRACE="name1,name2,...": log calls of runner functions (debug) */
++#define TRACE_MAX 16
++static routine_t trace_orig[TRACE_MAX];
++static const char *trace_name[TRACE_MAX];
++static int trace_count[TRACE_MAX];
++template <int N>
++ABI_ATTR static void trace_fn(RValue *ret, void *self, void *other, int argc, RValue *args)
++{
++    trace_orig[N](ret, self, other, argc, args);
++    /* log each distinct first argument once (max 40 per function) */
++    static double seen[TRACE_MAX][40];
++    double a0 = -12345;
++    if (argc > 0 && (args[0].kind & 0xffffff) == VALUE_REAL) a0 = args[0].rvalue.val;
++    else if (argc > 0 && (args[0].kind & 0xffffff) == 7) a0 = (double)args[0].rvalue.v32;   /* int32 */
++    else if (argc > 0 && (args[0].kind & 0xffffff) == 10) a0 = (double)args[0].rvalue.v64;  /* int64 */
++    else if (argc > 0 && (args[0].kind & 0xffffff) == 15) a0 = (double)(args[0].rvalue.v64 & 0xffffffff) + 1e9 * (double)(args[0].rvalue.v64 >> 32); /* ref */
++    double r = ((ret->kind & 0xffffff) == VALUE_REAL) ? ret->rvalue.val :
++               (((ret->kind & 0xffffff) == 13) ? (double)(ret->rvalue.val != 0) : -999);
++    double key = a0 + (r == -999 ? 0 : r) * 1e-3;   /* same args + same result: log once */
++    if (!strcmp(trace_name[N], "audio_play_sound")) key = trace_count[N] + 0.5; /* every call */
++    for (int i = 0; i < trace_count[N]; i++) if (seen[N][i] == key) return;
++    if (trace_count[N] >= 40) return;
++    seen[N][trace_count[N]++] = key;
++    char extra[160] = "";
++    for (int i = 1; i < argc && i < 6; i++) {
++        char b[32];
++        int k = args[i].kind & 0xffffff;
++        if (k == VALUE_REAL) snprintf(b, sizeof(b), " a%d=%g", i, args[i].rvalue.val);
++        else snprintf(b, sizeof(b), " a%d=<%d:%llx>", i, k, (unsigned long long)args[i].rvalue.v64);
++        strncat(extra, b, sizeof(extra) - strlen(extra) - 1);
++    }
++    LOG("trace %s(argc %d, a0 %g [%llx] kind %d%s) -> %g\n", trace_name[N], argc, a0,
++        argc > 0 ? (unsigned long long)args[0].rvalue.v64 : 0ULL, argc > 0 ? (args[0].kind & 0xffffff) : -1, extra, r);
++}
++template <int N> struct TraceTab { static void fill(routine_t *t) { t[N] = trace_fn<N>; TraceTab<N - 1>::fill(t); } };
++template <> struct TraceTab<-1> { static void fill(routine_t *t) {} };
++
++static void install_traces()
++{
++    const char *env = getenv("PORT_TRACE");
++    if (!env) return;
++    static routine_t wrappers[TRACE_MAX];
++    TraceTab<TRACE_MAX - 1>::fill(wrappers);
++    RunnerFunc **tab = (RunnerFunc **)so_symbol(g_yoyo, "the_functions");
++    int *numb = (int *)so_symbol(g_yoyo, "the_numb");
++    if (!tab || !*tab || !numb) return;
++    std::string list = std::string(",") + env + ",";
++    int n = 0;
++    for (int i = 0; i < *numb && n < TRACE_MAX; i++) {
++        RunnerFunc *e = &(*tab)[i];
++        if (!e->name || !e->fn) continue;
++        if (list.find(std::string(",") + e->name + ",") == std::string::npos) continue;
++        trace_orig[n] = e->fn;
++        trace_name[n] = e->name;
++        e->fn = wrappers[n];
++        n++;
++    }
++    LOG("tracing %d functions\n", n);
++}
++
++static void fix_function_table()
++{
++    struct { const char *name; routine_t fn; } fix[] = {
++        {"gamepad_is_supported", gamepad_is_supported},
++        {"gamepad_get_device_count", gamepad_get_device_count},
++        {"gamepad_is_connected", gamepad_is_connected},
++        {"gamepad_get_description", gamepad_get_description},
++        {"gamepad_get_button_threshold", gamepad_get_button_threshold},
++        {"gamepad_set_button_threshold", gamepad_set_button_threshold},
++        {"gamepad_axis_count", gamepad_axis_count},
++        {"gamepad_axis_value", gamepad_axis_value},
++        {"gamepad_button_check", gamepad_button_check},
++        {"gamepad_button_check_pressed", gamepad_button_check_pressed},
++        {"gamepad_button_check_released", gamepad_button_check_released},
++        {"gamepad_button_count", gamepad_button_count},
++        {"gamepad_button_value", gamepad_button_value},
++        {"gamepad_set_vibration", gamepad_set_vibration},
++        {"gamepad_set_axis_deadzone", gamepad_set_axis_deadzone},
++        {"gamepad_get_axis_deadzone", gamepad_get_axis_deadzone},
++        {"gamepad_set_colour", gamepad_set_colour},
++        {"gamepad_set_color", gamepad_set_colour},
++    };
++    if (getenv("PORT_DEBUG_PAD")) {
++        for (auto &f : fix) {
++            if (!strcmp(f.name, "gamepad_button_check")) f.fn = dbg_gp<0>;
++            if (!strcmp(f.name, "gamepad_button_check_pressed")) f.fn = dbg_gp<1>;
++            if (!strcmp(f.name, "gamepad_button_check_released")) f.fn = dbg_gp<2>;
++        }
++    }
++    RunnerFunc **tab = (RunnerFunc **)so_symbol(g_yoyo, "the_functions");
++    int *numb = (int *)so_symbol(g_yoyo, "the_numb");
++    if (!tab || !*tab || !numb) { LOG("function table not found\n"); return; }
++    int patched = 0;
++    for (int i = 0; i < *numb; i++) {
++        RunnerFunc *e = &(*tab)[i];
++        if (!e->name || strncmp(e->name, "gamepad_", 8) != 0) continue;
++        for (auto &f : fix) {
++            if (strcmp(e->name, f.name) == 0 && e->fn != f.fn) {
++                e->fn = f.fn;
++                patched++;
++            }
++        }
++    }
++    if (patched) LOG("gamepad: %d runner functions -> SDL gamepad\n", patched);
++}
++
++static void install_safe_real();
++void port_after_startup()
++{
++    fix_function_table();
++    install_safe_real();
++    install_traces();
++    if (g_option_scale) {
++        LOG("option_scale from game: %d\n", *g_option_scale);
++        /* the "Keep Aspect Ratio" APK sets -1; the letterbox is done by the
++           loader (PORT_KEEP_ASPECT), so the game always draws full scale */
++        *g_option_scale = 0;
++    }
++}
++
++/* PORT_DUMP_GLOBALS="a,b,c": print global variables at frame 300 (debug) */
++static void fmt_rvalue(RValue *v, char *out, size_t n)
++{
++    int k = v->kind & 0xffffff;
++    if (k == VALUE_REAL) snprintf(out, n, "%g", v->rvalue.val);
++    else if (k == 7) snprintf(out, n, "%d", v->rvalue.v32);
++    else if (k == 10) snprintf(out, n, "%lld", v->rvalue.v64);
++    else if (k == 13) snprintf(out, n, "%s", v->rvalue.val != 0 ? "true" : "false");
++    else if (k == 1 && v->rvalue.str && v->rvalue.str->m_thing) snprintf(out, n, "\"%.60s\"", (const char *)v->rvalue.str->m_thing);
++    else snprintf(out, n, "<kind %d>", k);
++}
++
++static void dump_globals()
++{
++    const char *env = getenv("PORT_DUMP_GLOBALS");
++    if (!env || !Code_Variable_Find_Slot_From_Name || !Variable_GetValue_Direct || !g_pGlobal) return;
++    std::string l = env;
++    size_t p = 0;
++    while (p < l.size()) {
++        size_t e = l.find(',', p);
++        if (e == std::string::npos) e = l.size();
++        std::string name = l.substr(p, e - p);
++        p = e + 1;
++        int slot = Code_Variable_Find_Slot_From_Name(*g_pGlobal, name.c_str());
++        if (slot < 0) { LOG("global %s: no slot\n", name.c_str()); continue; }
++        RValue v;
++        memset(&v, 0, sizeof(v));
++        Variable_GetValue_Direct(*g_pGlobal, slot, (int)0x80000000, &v, 0, 0);
++        char buf[128];
++        fmt_rvalue(&v, buf, sizeof(buf));
++        std::string line = std::string("global ") + name + " = " + buf;
++        if ((v.kind & 0xffffff) == 2) {
++            line += " [";
++            for (int i = 0; i < 24; i++) {
++                RValue el;
++                memset(&el, 0, sizeof(el));
++                if (!Variable_GetValue_Direct(*g_pGlobal, slot, i, &el, 0, 0)) break;
++                fmt_rvalue(&el, buf, sizeof(buf));
++                line += std::string(i ? ", " : "") + buf;
++            }
++            line += "]";
++        }
++        LOG("%s\n", line.c_str());
++    }
++}
++
++/* The game starts with its on-screen touch controls on (Android): in that mode
++   it ignores the gamepad. Turn them off, as the in-game "controls" setting
++   would (PORT_TOUCH_CONTROLS=1 keeps them). */
++static void touch_controls_off()
++{
++    static int slot = -2;
++    if (getenv("PORT_TOUCH_CONTROLS") && atoi(getenv("PORT_TOUCH_CONTROLS"))) return;
++    if (!Code_Variable_Find_Slot_From_Name || !Variable_GetValue_Direct || !Variable_SetValue_Direct || !g_pGlobal || !*g_pGlobal) return;
++    if (slot == -2) slot = Code_Variable_Find_Slot_From_Name(*g_pGlobal, "controles_tactiles");
++    if (slot < 0) return;
++    RValue v;
++    memset(&v, 0, sizeof(v));
++    Variable_GetValue_Direct(*g_pGlobal, slot, (int)0x80000000, &v, 0, 0);
++    int k = v.kind & 0xffffff;
++    bool on = (k == VALUE_REAL && v.rvalue.val != 0) || ((k == 7 || k == 13) && v.rvalue.v32 != 0);
++    static int last = -1;
++    if ((int)on != last) { LOG("touch controls: %s (kind %d)\n", on ? "on" : "off", k); last = on; }
++    if (!on) return;
++    RValue z;
++    memset(&z, 0, sizeof(z));
++    z.kind = VALUE_REAL;
++    z.rvalue.val = 0;
++    Variable_SetValue_Direct(*g_pGlobal, slot, (int)0x80000000, &z);
++    LOG("touch controls off (gamepad mode)\n");
++}
++
++static routine_t find_runner_fn(const char *name)
++{
++    RunnerFunc **tab = (RunnerFunc **)so_symbol(g_yoyo, "the_functions");
++    int *numb = (int *)so_symbol(g_yoyo, "the_numb");
++    if (!tab || !*tab || !numb) return NULL;
++    for (int i = 0; i < *numb; i++)
++        if ((*tab)[i].name && !strcmp((*tab)[i].name, name)) return (*tab)[i].fn;
++    return NULL;
++}
++
++/* On the handheld the game's audio stays silent unless a sound is started
++   early, before the first room (seen on device, not in the emulator).
++   Start two of the game's own sounds (one in memory, one streamed) at zero
++   volume. PORT_AUDIO_KICK=0 disables it. */
++static void audio_kick()
++{
++    if (getenv("PORT_AUDIO_KICK") && !atoi(getenv("PORT_AUDIO_KICK"))) return;
++    if (getenv("PORT_TEST_SOUND")) return;
++    routine_t play = find_runner_fn("audio_play_sound");
++    routine_t gain = find_runner_fn("audio_sound_gain");
++    if (!play || !gain) return;
++    const int ids[2] = {3, 206};
++    for (int i = 0; i < 2; i++) {
++        RValue a[3], r;
++        memset(a, 0, sizeof(a));
++        memset(&r, 0, sizeof(r));
++        a[0].kind = VALUE_REAL; a[0].rvalue.val = ids[i];
++        a[1].kind = VALUE_REAL; a[1].rvalue.val = 0;
++        a[2].kind = VALUE_REAL; a[2].rvalue.val = 0;
++        play(&r, NULL, NULL, 3, a);
++        if (r.kind != VALUE_REAL || r.rvalue.val < 0) continue;
++        RValue g[3], gr;
++        memset(g, 0, sizeof(g));
++        memset(&gr, 0, sizeof(gr));
++        g[0].kind = VALUE_REAL; g[0].rvalue.val = r.rvalue.val;   /* this instance only */
++        g[1].kind = VALUE_REAL; g[1].rvalue.val = 0;
++        g[2].kind = VALUE_REAL; g[2].rvalue.val = 0;
++        gain(&gr, NULL, NULL, 3, g);
++    }
++    LOG("audio started\n");
++}
++
++/* real("") throws in GameMaker; on Android the game always finds its data
++   files, here a missing one (e.g. the Endless Challenge save) would end the
++   game. Return 0 for an empty string instead. */
++static routine_t orig_real = NULL;
++ABI_ATTR static void safe_real(RValue *ret, void *self, void *other, int argc, RValue *args)
++{
++    if (argc >= 1 && (args[0].kind & 0xffffff) == VALUE_STRING) {
++        const char *s = (args[0].rvalue.str && args[0].rvalue.str->m_thing) ? (const char *)args[0].rvalue.str->m_thing : "";
++        while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
++        if (*s == 0) {
++            ret->kind = VALUE_REAL;
++            ret->rvalue.val = 0;
++            return;
++        }
++    }
++    orig_real(ret, self, other, argc, args);
++}
++
++static void install_safe_real()
++{
++    RunnerFunc **tab = (RunnerFunc **)so_symbol(g_yoyo, "the_functions");
++    int *numb = (int *)so_symbol(g_yoyo, "the_numb");
++    if (!tab || !*tab || !numb) return;
++    for (int i = 0; i < *numb; i++) {
++        RunnerFunc *e = &(*tab)[i];
++        if (e->name && !strcmp(e->name, "real") && e->fn != safe_real) {
++            orig_real = e->fn;
++            e->fn = safe_real;
++            return;
++        }
++    }
++}
++
++/* log the audio volume state (listener gain, the game's own setting) */
++static void audio_diag()
++{
++    typedef float (*lgain_t)(int);
++    lgain_t lg = (lgain_t)so_symbol(g_yoyo, "_Z21Audio_ListenerGetGaini");
++    char buf[64] = "?";
++    if (Code_Variable_Find_Slot_From_Name && Variable_GetValue_Direct && g_pGlobal && *g_pGlobal) {
++        int slot = Code_Variable_Find_Slot_From_Name(*g_pGlobal, "audiomaster");
++        if (slot >= 0) {
++            RValue v;
++            memset(&v, 0, sizeof(v));
++            Variable_GetValue_Direct(*g_pGlobal, slot, (int)0x80000000, &v, 0, 0);
++            fmt_rvalue(&v, buf, sizeof(buf));
++        }
++    }
++    LOG("audio: listener gain %.3f, game volume (audiomaster) %s\n", lg ? lg(0) : -1.0f, buf);
++}
++
++/* PORT_TEST_SOUND="idx[,idx...]": play these sounds at frame 60 (debug) */
++static void test_sounds()
++{
++    const char *env = getenv("PORT_TEST_SOUND");
++    if (!env) return;
++    RunnerFunc **tab = (RunnerFunc **)so_symbol(g_yoyo, "the_functions");
++    int *numb = (int *)so_symbol(g_yoyo, "the_numb");
++    if (!tab || !*tab || !numb) return;
++    routine_t play = NULL;
++    for (int i = 0; i < *numb; i++)
++        if ((*tab)[i].name && !strcmp((*tab)[i].name, "audio_play_sound")) { play = (*tab)[i].fn; break; }
++    if (!play) return;
++    std::string l = env;
++    size_t p = 0;
++    while (p < l.size()) {
++        size_t e = l.find(',', p);
++        if (e == std::string::npos) e = l.size();
++        int idx = atoi(l.substr(p, e - p).c_str());
++        RValue args[3];
++        memset(args, 0, sizeof(args));
++        args[0].kind = VALUE_REAL; args[0].rvalue.val = idx;
++        args[1].kind = VALUE_REAL; args[1].rvalue.val = 10;
++        args[2].kind = VALUE_REAL; args[2].rvalue.val = 0;
++        RValue ret;
++        memset(&ret, 0, sizeof(ret));
++        play(&ret, NULL, NULL, 3, args);
++        LOG("test sound %d -> %g\n", idx, ret.kind == VALUE_REAL ? ret.rvalue.val : -1.0);
++        p = e + 1;
++    }
++}
++
++/* frame rate in log.txt every 30 s (and on screen with PORT_SHOW_FPS=1) */
++static float g_fps_now = 0;
++float port_fps() { return g_fps_now; }
++static void fps_stats()
++{
++    static Uint32 last = 0, win_start = 0, sec_start = 0;
++    static int win_frames = 0, slow = 0, sec_frames = 0;
++    static Uint32 worst = 0;
++    Uint32 now = SDL_GetTicks();
++    if (!last) { last = win_start = sec_start = now; return; }
++    Uint32 dt = now - last;
++    last = now;
++    win_frames++; sec_frames++;
++    if (dt > 20) slow++;
++    if (dt > worst) worst = dt;
++    if (now - sec_start >= 1000) {
++        g_fps_now = sec_frames * 1000.0f / (now - sec_start);
++        sec_frames = 0; sec_start = now;
++    }
++    if (now - win_start >= 30000) {
++        LOG("fps %.1f, slow frames (>20 ms) %d%%, worst %u ms\n",
++            win_frames * 1000.0 / (now - win_start), win_frames ? slow * 100 / win_frames : 0, worst);
++        win_start = now; win_frames = 0; slow = 0; worst = 0;
++    }
++}
++
++void port_frame_begin()
++{
++    static int frames = 0;
++    fps_stats();
++    if (++frames == 2 || frames == 120)   /* in case the table is filled late */
++        fix_function_table();
++    if (frames == 60) {
++        test_sounds();
++        audio_kick();
++    }
++    if (frames == 300)
++        dump_globals();
++    if (frames == 600 || frames == 3600)
++        audio_diag();
++    if (frames % 30 == 0)
++        touch_controls_off();
++    std::deque<std::function<void()>> tasks;
++    {
++        std::lock_guard<std::mutex> lk(g_main_mtx);
++        tasks.swap(g_main_tasks);
++    }
++    for (auto &t : tasks)
++        t();
++}
+diff --git a/gmloader/port_inc/GLES2/gl2.h b/gmloader/port_inc/GLES2/gl2.h
+new file mode 100644
+index 0000000..7d39ea0
+--- /dev/null
++++ b/gmloader/port_inc/GLES2/gl2.h
+@@ -0,0 +1,3 @@
++/* Route Dear ImGui's GLES2 backend through gmloader's GLAD function pointers. */
++#pragma once
++#include "khronos/glad.h"
+diff --git a/gmloader/port_jni.h b/gmloader/port_jni.h
+new file mode 100644
+index 0000000..cbf9446
+--- /dev/null
++++ b/gmloader/port_jni.h
+@@ -0,0 +1,65 @@
++#pragma once
++#include "jni.h"
++#include "jni_internals.h"
++
++struct PortJNI {
++    static jobject CallExtensionFunction5(JNIEnv *env, jclass clz, jstring cls, jstring meth, jint argc, jdoubleArray dargs, jobjectArray oargs);
++    static jobject CallExtensionFunction4(JNIEnv *env, jclass clz, jstring cls, jstring meth, jint argc, jobjectArray oargs);
++    static void HttpGet(JNIEnv *env, jclass clz, jstring url, jint id);
++    static void HttpPost(JNIEnv *env, jclass clz, jstring url, jstring body, jint id);
++    static void HttpRequest(JNIEnv *env, jclass clz, jstring url, jstring method, jstring headers, jbyteArray body, jint id);
++    static jstring InputString(JNIEnv *env, jclass clz, jstring caption, jstring def);
++    static void InputStringAsync(JNIEnv *env, jclass clz, jstring caption, jstring def, jint id);
++    static void ShowLogin(JNIEnv *env, jclass clz, jstring user, jstring pass, jint id);
++    static void ShowMessage(JNIEnv *env, jclass clz, jstring msg);
++    static void ShowMessageAsync(JNIEnv *env, jclass clz, jstring msg, jint id);
++    static jint ShowQuestion(JNIEnv *env, jclass clz, jstring msg);
++    static void ShowQuestionAsync(JNIEnv *env, jclass clz, jstring msg, jint id);
++    static void VirtualKeyboardToggle(JNIEnv *env, jclass clz, jboolean show, jint type, jint ret, jint autocap, jboolean predictive, jintArray text);
++    static jboolean VirtualKeyboardGetStatus(JNIEnv *env, jclass clz);
++    static jint VirtualKeyboardGetHeight(JNIEnv *env, jclass clz);
++    static void OnKeyboardStringSet(JNIEnv *env, jclass clz, jintArray text);
++    static void OpenURL(JNIEnv *env, jclass clz, jstring url);
++    static jboolean isNetworkConnected(JNIEnv *env, jclass clz);
++    static jobject GetAssetManager(JNIEnv *env, jclass clz);
++    static jobject LoadDynamicAsset(JNIEnv *env, jclass clz, jstring path);
++    static jint DynamicAssetExists(JNIEnv *env, jclass clz, jstring path);
++    static jint CheckPermission(JNIEnv *env, jclass clz, jstring perm);
++    static jstring GetUDID(JNIEnv *env, jclass clz);
++    static jint UsingGL2(JNIEnv *env, jclass clz);
++    static jint GetDefaultFrameBuffer(JNIEnv *env, jclass clz);
++    static jstring clipboardGetText(JNIEnv *env, jclass clz);
++    static void clipboardSetText(JNIEnv *env, jclass clz, jstring text);
++    static jboolean clipboardHasText(JNIEnv *env, jclass clz);
++};
++
++#define PORT_STATIC(name, fn, sig) ManagedMethod::RegisterStatic<&PortJNI::fn>(RunnerJNILib::clazz, name, sig)
++#define PORT_MANAGED_METHODS \
++    PORT_STATIC("CallExtensionFunction", CallExtensionFunction5, "(Ljava/lang/String;Ljava/lang/String;I[D[Ljava/lang/Object;)Ljava/lang/Object;"), \
++    PORT_STATIC("CallExtensionFunction", CallExtensionFunction4, "(Ljava/lang/String;Ljava/lang/String;I[Ljava/lang/Object;)Ljava/lang/Object;"), \
++    PORT_STATIC("HttpGet", HttpGet, "(Ljava/lang/String;I)V"), \
++    PORT_STATIC("HttpPost", HttpPost, "(Ljava/lang/String;Ljava/lang/String;I)V"), \
++    PORT_STATIC("HttpRequest", HttpRequest, "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[BI)V"), \
++    PORT_STATIC("InputString", InputString, "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"), \
++    PORT_STATIC("InputStringAsync", InputStringAsync, "(Ljava/lang/String;Ljava/lang/String;I)V"), \
++    PORT_STATIC("ShowLogin", ShowLogin, "(Ljava/lang/String;Ljava/lang/String;I)V"), \
++    PORT_STATIC("ShowMessage", ShowMessage, "(Ljava/lang/String;)V"), \
++    PORT_STATIC("ShowMessageAsync", ShowMessageAsync, "(Ljava/lang/String;I)V"), \
++    PORT_STATIC("ShowQuestion", ShowQuestion, "(Ljava/lang/String;)I"), \
++    PORT_STATIC("ShowQuestionAsync", ShowQuestionAsync, "(Ljava/lang/String;I)V"), \
++    PORT_STATIC("VirtualKeyboardToggle", VirtualKeyboardToggle, "(ZIIIZ[I)V"), \
++    PORT_STATIC("VirtualKeyboardGetStatus", VirtualKeyboardGetStatus, "()Z"), \
++    PORT_STATIC("VirtualKeyboardGetHeight", VirtualKeyboardGetHeight, "()I"), \
++    PORT_STATIC("OnKeyboardStringSet", OnKeyboardStringSet, "([I)V"), \
++    PORT_STATIC("OpenURL", OpenURL, "(Ljava/lang/String;)V"), \
++    PORT_STATIC("isNetworkConnected", isNetworkConnected, "()Z"), \
++    PORT_STATIC("GetAssetManager", GetAssetManager, "()Ljava/lang/Object;"), \
++    PORT_STATIC("LoadDynamicAsset", LoadDynamicAsset, "(Ljava/lang/String;)Ljava/lang/Object;"), \
++    PORT_STATIC("DynamicAssetExists", DynamicAssetExists, "(Ljava/lang/String;)I"), \
++    PORT_STATIC("CheckPermission", CheckPermission, "(Ljava/lang/String;)I"), \
++    PORT_STATIC("GetUDID", GetUDID, "()Ljava/lang/String;"), \
++    PORT_STATIC("UsingGL2", UsingGL2, "()I"), \
++    PORT_STATIC("GetDefaultFrameBuffer", GetDefaultFrameBuffer, "()I"), \
++    PORT_STATIC("clipboardGetText", clipboardGetText, "()Ljava/lang/String;"), \
++    PORT_STATIC("clipboardSetText", clipboardSetText, "(Ljava/lang/String;)V"), \
++    PORT_STATIC("clipboardHasText", clipboardHasText, "()Z")
+diff --git a/gmloader/port_ui.cpp b/gmloader/port_ui.cpp
+new file mode 100644
+index 0000000..f4932f9
+--- /dev/null
++++ b/gmloader/port_ui.cpp
+@@ -0,0 +1,1336 @@
++/*
++ * On-screen overlay for handhelds (Dear ImGui, GLES2):
++ *  - virtual keyboard driven by the gamepad (opens/closes automatically when
++ *    the game asks for text, or manually with the keyboard button);
++ *  - text input / login / message / question dialogs used by the game's
++ *    get_string_async, get_login_async, show_message_async, ...;
++ *  - file picker for the game's "import level" extension;
++ *  - a pointer moved with a stick, for the touch menus.
++ *
++ * Gamepad layout while the keyboard is open (defaults):
++ *   D-pad / left stick  move        A  type key (hold: accents)
++ *   B  backspace        X  space     Y  shift
++ *   L1 / R1  letters/numbers/symbols
++ *   START  confirm (Enter)   SELECT  cancel   keyboard button  hide/show
++ */
++#include <SDL2/SDL.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++#include <math.h>
++#include <float.h>
++#include <ctype.h>
++#include <dirent.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include <algorithm>
++#include <string>
++#include <vector>
++
++#include "imgui.h"
++#include "imgui_impl_opengl3.h"
++#include "khronos/glad.h"
++#include "so_util.h"
++
++#include "port.h"
++
++#define LOG(...) do { fprintf(stderr, "[port-ui] " __VA_ARGS__); } while (0)
++
++/* ------------------------------------------------------------------------ */
++/* Configuration                                                            */
++/* ------------------------------------------------------------------------ */
++static int parse_button(const char *name, int def)
++{
++    if (!name || !*name) return def;
++    struct { const char *n; int b; } map[] = {
++        {"a", SDL_CONTROLLER_BUTTON_A}, {"b", SDL_CONTROLLER_BUTTON_B},
++        {"x", SDL_CONTROLLER_BUTTON_X}, {"y", SDL_CONTROLLER_BUTTON_Y},
++        {"back", SDL_CONTROLLER_BUTTON_BACK}, {"select", SDL_CONTROLLER_BUTTON_BACK},
++        {"guide", SDL_CONTROLLER_BUTTON_GUIDE}, {"start", SDL_CONTROLLER_BUTTON_START},
++        {"l3", SDL_CONTROLLER_BUTTON_LEFTSTICK}, {"leftstick", SDL_CONTROLLER_BUTTON_LEFTSTICK},
++        {"r3", SDL_CONTROLLER_BUTTON_RIGHTSTICK}, {"rightstick", SDL_CONTROLLER_BUTTON_RIGHTSTICK},
++        {"l1", SDL_CONTROLLER_BUTTON_LEFTSHOULDER}, {"lb", SDL_CONTROLLER_BUTTON_LEFTSHOULDER},
++        {"r1", SDL_CONTROLLER_BUTTON_RIGHTSHOULDER}, {"rb", SDL_CONTROLLER_BUTTON_RIGHTSHOULDER},
++        {"l2", 100}, {"lt", 100}, {"r2", 101}, {"rt", 101},
++        {"none", -1},
++    };
++    for (auto &m : map)
++        if (strcasecmp(name, m.n) == 0) return m.b;
++    return def;
++}
++
++static int cfg_vk_button = -1;   /* keyboard on/off (none: opens only when the game asks) */
++static int cfg_ptr_click = SDL_CONTROLLER_BUTTON_RIGHTSTICK;  /* pointer click   */
++static int cfg_ptr_click2 = -1;
++static int cfg_ptr_stick = 1;                                 /* 1 = right stick */
++static float cfg_ptr_speed = 1.0f;
++static int cfg_ptr_toggle = 100;                                /* pointer on/off: L2 */
++static bool ptr_toggle_was_held = false;
++static bool cfg_hint = true;
++static bool cfg_show_fps = false;
++static Uint32 cfg_hold_ms = 450;
++
++/* ------------------------------------------------------------------------ */
++/* State                                                                    */
++/* ------------------------------------------------------------------------ */
++static SDL_Window *g_win = NULL;
++static bool g_imgui_ready = false;
++static bool g_imgui_failed = false;
++static float g_font_px = 18.0f;
++static Uint32 g_last_ticks = 0;
++
++/* pad edge detection */
++#define NBTN 32
++static bool pad_now[NBTN], pad_prev[NBTN];
++static Uint32 pad_down_at[NBTN];
++static Uint32 pad_repeat_at[NBTN];
++
++/* pointer */
++static float ptr_x = -1, ptr_y = -1;
++static bool ptr_visible = false;
++static Uint32 ptr_last_move = 0;
++static bool ptr_btn = false;
++static bool ptr_enabled = true;        /* hold the click button (R3) to toggle */
++static Uint32 ptr_click_down_at = 0;
++static bool ptr_toggle_latched = false;
++static std::string toast;
++static Uint32 toast_until = 0;
++
++/* keyboard */
++enum { K_TEXT, K_SHIFT, K_LAYER, K_SPACE, K_BKSP, K_ENTER, K_LEFT, K_RIGHT, K_HIDE };
++struct Key { const char *n; const char *s; int act; float w; };
++
++static bool vk_visible = false;
++static bool vk_from_game = false;      /* keyboard_virtual_show()          */
++static bool vk_manual = false;         /* opened with the keyboard button  */
++static int vk_layer = 0;               /* 0 abc, 1 123, 2 #+=             */
++static bool vk_shift = false;
++static bool vk_caps = false;
++static int vk_cur_row = 0, vk_cur_col = 0;
++static std::string vk_text;            /* manual / game mode text          */
++static size_t vk_caret = 0;            /* byte offset into the edited text */
++static int vk_height_px = 0;
++static Uint32 vk_a_down_at = 0;
++static bool vk_a_held = false;
++static bool vk_popup = false;
++static std::vector<std::string> vk_variants;
++static int vk_variant_idx = 0;
++
++/* dialogs */
++static port_dialog_kind dlg = PD_NONE;
++static int dlg_id = 0;
++static std::string dlg_caption;
++static std::string dlg_field[2];
++static std::string dlg_default;
++static int dlg_focus = 0;
++static int dlg_choice = 0;
++static std::string dlg_dir, dlg_filter;
++static std::vector<std::string> dlg_files;
++static int dlg_sel = 0;
++struct PendingDialog { port_dialog_kind k; int id; std::string cap, t1, t2, filter; };
++static std::vector<PendingDialog> dlg_queue;
++
++/* hint */
++static Uint32 hint_until = 0;
++
++/* SELECT + START held: quit (no gptokeyb needed) */
++static Uint32 quit_combo_since = 0;
++static bool quit_requested = false;
++bool ui_quit_requested() { return quit_requested; }
++
++/* ------------------------------------------------------------------------ */
++/* Keep aspect ratio: the game renders into a centered 16:9 area of the     */
++/* default framebuffer (viewport/scissor offset), bars are cleared black.   */
++/* ------------------------------------------------------------------------ */
++static int ar_on = 0, ar_ox = 0, ar_oy = 0, ar_w = 0, ar_h = 0, ar_win_w = 0, ar_win_h = 0;
++static int ar_num = 16, ar_den = 9;
++static GLuint ar_cur_fb = 0;
++static PFNGLVIEWPORTPROC real_viewport = NULL;
++static PFNGLSCISSORPROC real_scissor = NULL;
++static PFNGLBINDFRAMEBUFFERPROC real_bindfb = NULL;
++
++static void hk_viewport(GLint x, GLint y, GLsizei w, GLsizei h)
++{
++    if (ar_on && ar_cur_fb == 0) { x += ar_ox; y += ar_oy; }
++    real_viewport(x, y, w, h);
++}
++
++static void hk_scissor(GLint x, GLint y, GLsizei w, GLsizei h)
++{
++    if (ar_on && ar_cur_fb == 0) { x += ar_ox; y += ar_oy; }
++    real_scissor(x, y, w, h);
++}
++
++static void hk_bindfb(GLenum target, GLuint fb)
++{
++    if (target == GL_FRAMEBUFFER) ar_cur_fb = fb;
++    real_bindfb(target, fb);
++}
++
++extern DynLibFunction symtable_gles2[];
++static void ar_install_hooks()
++{
++    for (int i = 0; symtable_gles2[i].symbol; i++) {
++        const char *n = symtable_gles2[i].symbol;
++        if (!strcmp(n, "glViewport")) { real_viewport = (PFNGLVIEWPORTPROC)symtable_gles2[i].func; symtable_gles2[i].func = (uintptr_t)&hk_viewport; }
++        else if (!strcmp(n, "glScissor")) { real_scissor = (PFNGLSCISSORPROC)symtable_gles2[i].func; symtable_gles2[i].func = (uintptr_t)&hk_scissor; }
++        else if (!strcmp(n, "glBindFramebuffer")) { real_bindfb = (PFNGLBINDFRAMEBUFFERPROC)symtable_gles2[i].func; symtable_gles2[i].func = (uintptr_t)&hk_bindfb; }
++    }
++    if (!real_viewport || !real_scissor || !real_bindfb) {
++        LOG("aspect: GL hooks unavailable, keeping fullscreen\n");
++        ar_on = 0;
++    }
++}
++
++/* window size -> size reported to the game */
++void port_game_size(int win_w, int win_h, int *gw, int *gh)
++{
++    if (!ar_on || win_w <= 0 || win_h <= 0) {
++        *gw = win_w; *gh = win_h;
++        ar_ox = ar_oy = 0;
++        return;
++    }
++    if (win_w != ar_win_w || win_h != ar_win_h) {
++        ar_win_w = win_w; ar_win_h = win_h;
++        if ((long)win_w * ar_den > (long)win_h * ar_num) { ar_h = win_h; ar_w = (int)((long)win_h * ar_num / ar_den); }
++        else { ar_w = win_w; ar_h = (int)((long)win_w * ar_den / ar_num); }
++        ar_ox = (win_w - ar_w) / 2;
++        ar_oy = (win_h - ar_h) / 2;
++        LOG("aspect %d:%d -> game area %dx%d at %d,%d\n", ar_num, ar_den, ar_w, ar_h, ar_ox, ar_oy);
++    }
++    *gw = ar_w; *gh = ar_h;
++}
++
++/* window (top-left origin) -> game coordinates */
++void port_map_mouse(int *x, int *y)
++{
++    if (!ar_on) return;
++    int top = ar_win_h - ar_oy - ar_h;   /* GL y offset is from the bottom */
++    *x -= ar_ox;
++    *y -= top;
++    if (*x < 0) *x = 0;
++    if (*y < 0) *y = 0;
++    if (*x > ar_w - 1) *x = ar_w - 1;
++    if (*y > ar_h - 1) *y = ar_h - 1;
++}
++
++static void ar_clear_bars(int win_w, int win_h)
++{
++    if (!ar_on || (ar_ox == 0 && ar_oy == 0)) return;
++    GLint fbo = 0;
++    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
++    GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
++    GLint box[4];
++    GLfloat cc[4];
++    GLboolean cm[4];
++    glGetIntegerv(GL_SCISSOR_BOX, box);
++    glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
++    glGetBooleanv(GL_COLOR_WRITEMASK, cm);
++    if (fbo) real_bindfb(GL_FRAMEBUFFER, 0);
++    glEnable(GL_SCISSOR_TEST);
++    glColorMask(1, 1, 1, 1);
++    glClearColor(0, 0, 0, 1);
++    int top = win_h - ar_oy - ar_h;
++    if (ar_oy > 0) {
++        real_scissor(0, 0, win_w, ar_oy); glClear(GL_COLOR_BUFFER_BIT);
++        real_scissor(0, ar_oy + ar_h, win_w, top); glClear(GL_COLOR_BUFFER_BIT);
++    }
++    if (ar_ox > 0) {
++        real_scissor(0, 0, ar_ox, win_h); glClear(GL_COLOR_BUFFER_BIT);
++        real_scissor(ar_ox + ar_w, 0, win_w - ar_ox - ar_w, win_h); glClear(GL_COLOR_BUFFER_BIT);
++    }
++    real_scissor(box[0], box[1], box[2], box[3]);
++    if (!sc) glDisable(GL_SCISSOR_TEST);
++    glClearColor(cc[0], cc[1], cc[2], cc[3]);
++    glColorMask(cm[0], cm[1], cm[2], cm[3]);
++    if (fbo) real_bindfb(GL_FRAMEBUFFER, fbo);
++}
++
++/* ------------------------------------------------------------------------ */
++/* Layouts                                                                  */
++/* ------------------------------------------------------------------------ */
++static const std::vector<std::vector<Key>> &rows()
++{
++    static const std::vector<std::vector<Key>> abc = {
++        {{"q","Q",K_TEXT,1},{"w","W",K_TEXT,1},{"e","E",K_TEXT,1},{"r","R",K_TEXT,1},{"t","T",K_TEXT,1},{"y","Y",K_TEXT,1},{"u","U",K_TEXT,1},{"i","I",K_TEXT,1},{"o","O",K_TEXT,1},{"p","P",K_TEXT,1},{"Del","Del",K_BKSP,1.4f}},
++        {{"a","A",K_TEXT,1},{"s","S",K_TEXT,1},{"d","D",K_TEXT,1},{"f","F",K_TEXT,1},{"g","G",K_TEXT,1},{"h","H",K_TEXT,1},{"j","J",K_TEXT,1},{"k","K",K_TEXT,1},{"l","L",K_TEXT,1},{"@","@",K_TEXT,1},{"Enter","Enter",K_ENTER,1.6f}},
++        {{"Shift","Shift",K_SHIFT,1.4f},{"z","Z",K_TEXT,1},{"x","X",K_TEXT,1},{"c","C",K_TEXT,1},{"v","V",K_TEXT,1},{"b","B",K_TEXT,1},{"n","N",K_TEXT,1},{"m","M",K_TEXT,1},{"_","_",K_TEXT,1},{".",".",K_TEXT,1},{"-","-",K_TEXT,1}},
++        {{"123","123",K_LAYER,1.6f},{"Space","Space",K_SPACE,5.4f},{"<","<",K_LEFT,1},{">",">",K_RIGHT,1},{"Hide","Hide",K_HIDE,1.4f}},
++    };
++    static const std::vector<std::vector<Key>> num = {
++        {{"1","1",K_TEXT,1},{"2","2",K_TEXT,1},{"3","3",K_TEXT,1},{"4","4",K_TEXT,1},{"5","5",K_TEXT,1},{"6","6",K_TEXT,1},{"7","7",K_TEXT,1},{"8","8",K_TEXT,1},{"9","9",K_TEXT,1},{"0","0",K_TEXT,1},{"Del","Del",K_BKSP,1.4f}},
++        {{".",".",K_TEXT,1},{",",",",K_TEXT,1},{":",":",K_TEXT,1},{"!","!",K_TEXT,1},{"?","?",K_TEXT,1},{"/","/",K_TEXT,1},{"\\","\\",K_TEXT,1},{"\"","\"",K_TEXT,1},{"'","'",K_TEXT,1},{"@","@",K_TEXT,1},{"Enter","Enter",K_ENTER,1.6f}},
++        {{"#+=","#+=",K_SHIFT,1.4f},{"(","(",K_TEXT,1},{")",")",K_TEXT,1},{"-","-",K_TEXT,1},{"_","_",K_TEXT,1},{"+","+",K_TEXT,1},{"=","=",K_TEXT,1},{";",";",K_TEXT,1},{"$","$",K_TEXT,1},{"&","&",K_TEXT,1},{"*","*",K_TEXT,1}},
++        {{"abc","abc",K_LAYER,1.6f},{"Space","Space",K_SPACE,5.4f},{"<","<",K_LEFT,1},{">",">",K_RIGHT,1},{"Hide","Hide",K_HIDE,1.4f}},
++    };
++    static const std::vector<std::vector<Key>> sym = {
++        {{"[","[",K_TEXT,1},{"]","]",K_TEXT,1},{"{","{",K_TEXT,1},{"}","}",K_TEXT,1},{"#","#",K_TEXT,1},{"%","%",K_TEXT,1},{"^","^",K_TEXT,1},{"*","*",K_TEXT,1},{"+","+",K_TEXT,1},{"=","=",K_TEXT,1},{"Del","Del",K_BKSP,1.4f}},
++        {{"_","_",K_TEXT,1},{"\\","\\",K_TEXT,1},{"|","|",K_TEXT,1},{"~","~",K_TEXT,1},{"<","<",K_TEXT,1},{">",">",K_TEXT,1},{"\xe2\x82\xac","\xe2\x82\xac",K_TEXT,1},{"\xc2\xa3","\xc2\xa3",K_TEXT,1},{"\xc2\xa5","\xc2\xa5",K_TEXT,1},{"`","`",K_TEXT,1},{"Enter","Enter",K_ENTER,1.6f}},
++        {{"123","123",K_SHIFT,1.4f},{".",".",K_TEXT,1},{",",",",K_TEXT,1},{"?","?",K_TEXT,1},{"!","!",K_TEXT,1},{"'","'",K_TEXT,1},{"\xc2\xbf","\xc2\xbf",K_TEXT,1},{"\xc2\xa1","\xc2\xa1",K_TEXT,1},{"\xc2\xb0","\xc2\xb0",K_TEXT,1},{"\xc2\xa7","\xc2\xa7",K_TEXT,1},{"/","/",K_TEXT,1}},
++        {{"abc","abc",K_LAYER,1.6f},{"Space","Space",K_SPACE,5.4f},{"<","<",K_LEFT,1},{">",">",K_RIGHT,1},{"Hide","Hide",K_HIDE,1.4f}},
++    };
++    return vk_layer == 1 ? num : (vk_layer == 2 ? sym : abc);
++}
++
++static const char *variants_lower[26] = {
++    "a á à â ä ã å ā ą æ", "b", "c ç ć č", "d ď đ", "e é è ê ë ē ė ę ě", "f", "g ğ ģ", "h", "i í ì î ï ī į ı",
++    "j", "k ķ", "l ł ľ ļ", "m", "n ñ ń ň ņ", "o ó ò ô ö õ ø ō ő œ", "p", "q", "r ř ŕ", "s ś š ş ș ß", "t ť ț ţ",
++    "u ú ù û ü ū ů ű ų", "v", "w ŵ", "x", "y ý ÿ ŷ", "z ź ż ž",
++};
++static const char *variants_upper[26] = {
++    "A Á À Â Ä Ã Å Ā Ą Æ", "B", "C Ç Ć Č", "D Ď Đ", "E É È Ê Ë Ē Ė Ę Ě", "F", "G Ğ Ģ", "H", "I Í Ì Î Ï Ī Į İ",
++    "J", "K Ķ", "L Ł Ľ Ļ", "M", "N Ñ Ń Ň Ņ", "O Ó Ò Ô Ö Õ Ø Ō Ő Œ", "P", "Q", "R Ř Ŕ", "S Ś Š Ş Ș", "T Ť Ț Ţ",
++    "U Ú Ù Û Ü Ū Ů Ű Ų", "V", "W Ŵ", "X", "Y Ý Ÿ Ŷ", "Z Ź Ż Ž",
++};
++
++static std::vector<std::string> split_ws(const char *s)
++{
++    std::vector<std::string> v;
++    std::string cur;
++    for (; *s; s++) {
++        if (*s == ' ') { if (!cur.empty()) v.push_back(cur); cur.clear(); }
++        else cur += *s;
++    }
++    if (!cur.empty()) v.push_back(cur);
++    return v;
++}
++
++static bool upper_now() { return vk_layer == 0 && (vk_shift || vk_caps); }
++
++static const char *key_label(const Key &k)
++{
++    if (k.act == K_TEXT) return upper_now() ? k.s : k.n;
++    if (k.act == K_SHIFT && vk_layer == 0) return vk_caps ? "CAPS" : (vk_shift ? "SHIFT" : "Shift");
++    return k.n;
++}
++
++/* ------------------------------------------------------------------------ */
++/* Text editing                                                             */
++/* ------------------------------------------------------------------------ */
++static std::string *edit_target()
++{
++    if (dlg == PD_INPUT) return &dlg_field[0];
++    if (dlg == PD_LOGIN) return &dlg_field[dlg_focus];
++    return &vk_text;
++}
++
++static size_t utf8_prev(const std::string &s, size_t i)
++{
++    if (i == 0) return 0;
++    i--;
++    while (i > 0 && ((unsigned char)s[i] & 0xc0) == 0x80) i--;
++    return i;
++}
++
++static size_t utf8_next(const std::string &s, size_t i)
++{
++    if (i >= s.size()) return s.size();
++    i++;
++    while (i < s.size() && ((unsigned char)s[i] & 0xc0) == 0x80) i++;
++    return i;
++}
++
++static void text_changed()
++{
++    if (dlg != PD_NONE)
++        return;
++    /* keyboard opened by the game or manually: forward to keyboard_string */
++    port_vk_text(vk_text);
++}
++
++static void vk_insert(const std::string &s)
++{
++    std::string *t = edit_target();
++    if (vk_caret > t->size()) vk_caret = t->size();
++    if (t->size() + s.size() > 1000) return;
++    t->insert(vk_caret, s);
++    vk_caret += s.size();
++    text_changed();
++    if (dlg == PD_NONE) {
++        unsigned char c = (unsigned char)s[0];
++        port_key_event(1, 0, (s.size() == 1) ? c : 0);
++    }
++    if (vk_shift && !vk_caps) vk_shift = false;
++}
++
++static void vk_backspace()
++{
++    std::string *t = edit_target();
++    if (vk_caret > t->size()) vk_caret = t->size();
++    if (vk_caret == 0) return;
++    size_t p = utf8_prev(*t, vk_caret);
++    t->erase(p, vk_caret - p);
++    vk_caret = p;
++    text_changed();
++    if (dlg == PD_NONE)
++        port_key_event(1, 67, 8);
++}
++
++/* ------------------------------------------------------------------------ */
++/* Keyboard visibility                                                      */
++/* ------------------------------------------------------------------------ */
++static void set_vk_visible(bool v)
++{
++    if (v == vk_visible) return;
++    vk_visible = v;
++    vk_popup = false;
++    vk_a_held = false;
++    if (v) {
++        vk_cur_row = 0; vk_cur_col = 0;
++        SDL_StartTextInput();
++    } else if (dlg == PD_NONE) {
++        SDL_StopTextInput();
++    }
++    if (vk_from_game || dlg == PD_NONE)
++        port_vk_status(v, v ? vk_height_px : 0);
++}
++
++void ui_vk_toggle(bool show, const std::string &initial, bool from_game)
++{
++    if (from_game) {
++        vk_from_game = show;
++        vk_manual = false;
++        if (show) {
++            vk_text = initial;
++            vk_caret = vk_text.size();
++        }
++    }
++    set_vk_visible(show || dlg == PD_INPUT || dlg == PD_LOGIN);
++}
++
++bool ui_vk_visible() { return vk_visible; }
++int ui_vk_height() { return vk_height_px; }
++
++void ui_vk_set_text(const std::string &utf8)
++{
++    vk_text = utf8;
++    if (vk_caret > vk_text.size()) vk_caret = vk_text.size();
++}
++
++/* ------------------------------------------------------------------------ */
++/* Dialogs                                                                  */
++/* ------------------------------------------------------------------------ */
++/* files offered by the import picker: the import folder and its
++   subfolders (Mods/...), two levels deep; music and notes are skipped */
++static void scan_dir(const std::string &rel, int depth)
++{
++    std::string dir = rel.empty() ? dlg_dir : dlg_dir + "/" + rel;
++    DIR *d = opendir(dir.c_str());
++    if (!d) return;
++    struct dirent *e;
++    while ((e = readdir(d))) {
++        if (e->d_name[0] == '.') continue;
++        std::string n = e->d_name;
++        std::string r = rel.empty() ? n : rel + "/" + n;
++        struct stat st;
++        if (stat((dir + "/" + n).c_str(), &st) != 0) continue;
++        if (S_ISDIR(st.st_mode)) {
++            if (depth < 2) scan_dir(r, depth + 1);
++            continue;
++        }
++        if (!S_ISREG(st.st_mode)) continue;
++        const char *dot = strrchr(n.c_str(), '.');
++        if (dot && (!strcasecmp(dot, ".txt") || !strcasecmp(dot, ".ogg") || !strcasecmp(dot, ".md")))
++            continue;
++        if (!dlg_filter.empty()) {
++            if (n.size() < dlg_filter.size()) continue;
++            std::string ext = n.substr(n.size() - dlg_filter.size());
++            if (strcasecmp(ext.c_str(), dlg_filter.c_str()) != 0) continue;
++        }
++        dlg_files.push_back(r);
++    }
++    closedir(d);
++}
++
++static void scan_files()
++{
++    dlg_files.clear();
++    scan_dir("", 0);
++    std::sort(dlg_files.begin(), dlg_files.end());
++    dlg_sel = 0;
++}
++
++static void start_dialog(const PendingDialog &p)
++{
++    dlg = p.k;
++    dlg_id = p.id;
++    dlg_caption = p.cap;
++    dlg_field[0] = p.t1;
++    dlg_field[1] = p.t2;
++    dlg_default = p.t1;
++    dlg_focus = 0;
++    dlg_choice = 0;
++    LOG("dialog %d (id %d): %s\n", (int)dlg, dlg_id, dlg_caption.c_str());
++    if (dlg == PD_FILEPICK) {
++        dlg_dir = p.t1;
++        dlg_filter = p.filter;
++        scan_files();
++    }
++    if (dlg == PD_INPUT || dlg == PD_LOGIN) {
++        vk_caret = dlg_field[0].size();
++        vk_layer = 0;
++        vk_shift = false;
++        vk_visible = false;
++        set_vk_visible(true);
++    }
++}
++
++void ui_open_dialog(port_dialog_kind kind, int id, const char *caption, const char *t1, const char *t2, const char *filter)
++{
++    PendingDialog p = {kind, id, caption ? caption : "", t1 ? t1 : "", t2 ? t2 : "", filter ? filter : ""};
++    if (dlg == PD_NONE)
++        start_dialog(p);
++    else
++        dlg_queue.push_back(p);
++}
++
++static void close_dialog()
++{
++    bool had_kb = (dlg == PD_INPUT || dlg == PD_LOGIN);
++    dlg = PD_NONE;
++    if (had_kb) {
++        vk_visible = false;
++        vk_popup = false;
++        SDL_StopTextInput();
++        if (vk_from_game || vk_manual) set_vk_visible(true);
++    }
++    if (!dlg_queue.empty()) {
++        PendingDialog p = dlg_queue.front();
++        dlg_queue.erase(dlg_queue.begin());
++        start_dialog(p);
++    }
++}
++
++static void dialog_confirm(bool ok)
++{
++    switch (dlg) {
++    case PD_INPUT:
++        port_input_result(ok ? dlg_field[0].c_str() : "", ok ? 1 : 0, dlg_id);
++        break;
++    case PD_LOGIN:
++        if (ok) port_login_result(dlg_field[0].c_str(), dlg_field[1].c_str(), dlg_id);
++        else port_login_result("", "", dlg_id);
++        break;
++    case PD_MESSAGE:
++        port_input_result("OK", 1, dlg_id);
++        break;
++    case PD_QUESTION:
++        port_input_result(ok ? "1" : "0", ok ? 1 : 0, dlg_id);
++        break;
++    case PD_FILEPICK:
++        if (ok && dlg_sel >= 0 && dlg_sel < (int)dlg_files.size())
++            port_filepicker_result(dlg_dir + "/" + dlg_files[dlg_sel]);
++        else
++            port_filepicker_result("");
++        break;
++    default:
++        break;
++    }
++    close_dialog();
++}
++
++/* Enter key on the keyboard */
++static void vk_enter()
++{
++    if (dlg == PD_INPUT) { dialog_confirm(true); return; }
++    if (dlg == PD_LOGIN) {
++        if (dlg_focus == 0) { dlg_focus = 1; vk_caret = dlg_field[1].size(); }
++        else dialog_confirm(true);
++        return;
++    }
++    port_key_event(1, 66, 13);
++    if (vk_from_game || vk_manual) {
++        vk_from_game = false;
++        vk_manual = false;
++        set_vk_visible(false);
++    }
++}
++
++static void vk_press(const Key &k)
++{
++    switch (k.act) {
++    case K_TEXT: vk_insert(key_label(k)); break;
++    case K_SPACE: vk_insert(" "); break;
++    case K_BKSP: vk_backspace(); break;
++    case K_ENTER: vk_enter(); break;
++    case K_SHIFT:
++        if (vk_layer == 0) {
++            if (vk_caps) { vk_caps = false; vk_shift = false; }
++            else if (vk_shift) vk_caps = true;
++            else vk_shift = true;
++        } else {
++            vk_layer = (vk_layer == 1) ? 2 : 1;
++        }
++        break;
++    case K_LAYER:
++        vk_layer = (vk_layer == 0) ? 1 : 0;
++        vk_shift = false; vk_caps = false;
++        break;
++    case K_LEFT: { std::string *t = edit_target(); vk_caret = utf8_prev(*t, std::min(vk_caret, t->size())); break; }
++    case K_RIGHT: { std::string *t = edit_target(); vk_caret = utf8_next(*t, vk_caret); break; }
++    case K_HIDE:
++        if (dlg == PD_NONE) { vk_manual = false; vk_from_game = false; }
++        set_vk_visible(false);
++        break;
++    }
++    const auto &r = rows();
++    vk_cur_row = std::min(vk_cur_row, (int)r.size() - 1);
++    vk_cur_col = std::min(vk_cur_col, (int)r[vk_cur_row].size() - 1);
++}
++
++static void vk_move(int dx, int dy)
++{
++    const auto &r = rows();
++    if (dy) {
++        /* keep the horizontal position when changing row */
++        float units = 0, target = 0;
++        for (int c = 0; c < vk_cur_col; c++) units += r[vk_cur_row][c].w;
++        target = units + r[vk_cur_row][vk_cur_col].w * 0.5f;
++        vk_cur_row = (vk_cur_row + dy + (int)r.size()) % (int)r.size();
++        float acc = 0; int best = 0;
++        for (int c = 0; c < (int)r[vk_cur_row].size(); c++) {
++            if (target >= acc && target < acc + r[vk_cur_row][c].w) { best = c; break; }
++            acc += r[vk_cur_row][c].w;
++            best = c;
++        }
++        vk_cur_col = best;
++    }
++    if (dx) {
++        int n = (int)r[vk_cur_row].size();
++        vk_cur_col = (vk_cur_col + dx + n) % n;
++    }
++}
++
++/* ------------------------------------------------------------------------ */
++/* Pad handling                                                             */
++/* ------------------------------------------------------------------------ */
++static bool pressed(int b) { return b >= 0 && b < NBTN && pad_now[b] && !pad_prev[b]; }
++static bool released(int b) { return b >= 0 && b < NBTN && !pad_now[b] && pad_prev[b]; }
++
++/* pressed, with auto-repeat while held */
++static bool pressed_rep(int b)
++{
++    if (b < 0 || b >= NBTN) return false;
++    Uint32 now = SDL_GetTicks();
++    if (pressed(b)) { pad_down_at[b] = now; pad_repeat_at[b] = now + 320; return true; }
++    if (pad_now[b] && now >= pad_repeat_at[b]) { pad_repeat_at[b] = now + 85; return true; }
++    return false;
++}
++
++enum { VB_UP = 20, VB_DOWN, VB_LEFT, VB_RIGHT };
++
++static void read_pad(SDL_GameController *pad)
++{
++    memcpy(pad_prev, pad_now, sizeof(pad_now));
++    memset(pad_now, 0, sizeof(pad_now));
++    if (!pad) return;
++    for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX && b < 20; b++)
++        pad_now[b] = SDL_GameControllerGetButton(pad, (SDL_GameControllerButton)b) != 0;
++    /* triggers as buttons (indexes 24/25) */
++    pad_now[24] = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 12000;
++    pad_now[25] = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 12000;
++    /* left stick as d-pad for the overlay */
++    int lx = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTX);
++    int ly = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_LEFTY);
++    pad_now[VB_UP] = pad_now[SDL_CONTROLLER_BUTTON_DPAD_UP] || ly < -16000;
++    pad_now[VB_DOWN] = pad_now[SDL_CONTROLLER_BUTTON_DPAD_DOWN] || ly > 16000;
++    pad_now[VB_LEFT] = pad_now[SDL_CONTROLLER_BUTTON_DPAD_LEFT] || lx < -16000;
++    pad_now[VB_RIGHT] = pad_now[SDL_CONTROLLER_BUTTON_DPAD_RIGHT] || lx > 16000;
++}
++
++static int map_cfg_button(int b)
++{
++    if (b == 100) return 24;
++    if (b == 101) return 25;
++    return b;
++}
++
++static void handle_keyboard_pad()
++{
++    const auto &r = rows();
++    if (vk_popup) {
++        int n = (int)vk_variants.size();
++        if (pressed_rep(VB_LEFT) || pressed_rep(VB_UP)) vk_variant_idx = (vk_variant_idx - 1 + n) % n;
++        if (pressed_rep(VB_RIGHT) || pressed_rep(VB_DOWN)) vk_variant_idx = (vk_variant_idx + 1) % n;
++        if (pressed(SDL_CONTROLLER_BUTTON_A)) {
++            vk_insert(vk_variants[vk_variant_idx]);
++            vk_popup = false;
++        }
++        if (pressed(SDL_CONTROLLER_BUTTON_B)) vk_popup = false;
++        return;
++    }
++
++    if (pressed_rep(VB_UP)) { vk_move(0, -1); vk_a_held = false; }
++    if (pressed_rep(VB_DOWN)) { vk_move(0, 1); vk_a_held = false; }
++    if (pressed_rep(VB_LEFT)) { vk_move(-1, 0); vk_a_held = false; }
++    if (pressed_rep(VB_RIGHT)) { vk_move(1, 0); vk_a_held = false; }
++
++    const Key &k = r[vk_cur_row][vk_cur_col];
++    if (pressed(SDL_CONTROLLER_BUTTON_A)) {
++        const char *lbl = key_label(k);
++        bool has_var = k.act == K_TEXT && strlen(lbl) == 1 && isalpha((unsigned char)lbl[0]);
++        if (has_var) {
++            vk_a_held = true;
++            vk_a_down_at = SDL_GetTicks();
++        } else if (k.act == K_BKSP || k.act == K_LEFT || k.act == K_RIGHT) {
++            vk_press(k);
++            pad_repeat_at[SDL_CONTROLLER_BUTTON_A] = SDL_GetTicks() + 400;
++        } else {
++            vk_press(k);
++        }
++    } else if (pad_now[SDL_CONTROLLER_BUTTON_A] && !vk_a_held &&
++               (k.act == K_BKSP || k.act == K_LEFT || k.act == K_RIGHT) &&
++               SDL_GetTicks() >= pad_repeat_at[SDL_CONTROLLER_BUTTON_A]) {
++        vk_press(k);
++        pad_repeat_at[SDL_CONTROLLER_BUTTON_A] = SDL_GetTicks() + 80;
++    }
++    if (vk_a_held) {
++        if (released(SDL_CONTROLLER_BUTTON_A)) {
++            vk_a_held = false;
++            vk_press(k);
++        } else if (SDL_GetTicks() - vk_a_down_at > cfg_hold_ms) {
++            const char *lbl = key_label(k);
++            int idx = tolower((unsigned char)lbl[0]) - 'a';
++            vk_variants = split_ws(isupper((unsigned char)lbl[0]) ? variants_upper[idx] : variants_lower[idx]);
++            vk_a_held = false;
++            if (vk_variants.size() > 1) {
++                vk_popup = true;
++                vk_variant_idx = 0;
++            } else {
++                vk_press(k);
++            }
++        }
++    }
++
++    if (pressed_rep(SDL_CONTROLLER_BUTTON_B)) vk_backspace();
++    if (pressed_rep(SDL_CONTROLLER_BUTTON_X)) vk_insert(" ");
++    if (pressed(SDL_CONTROLLER_BUTTON_Y)) {
++        if (vk_layer == 0) vk_shift = !vk_shift, vk_caps = false;
++        else vk_layer = (vk_layer == 1) ? 2 : 1;
++    }
++    if (pressed(SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) { vk_layer = (vk_layer + 2) % 3; vk_shift = false; vk_caps = false; }
++    if (pressed(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) { vk_layer = (vk_layer + 1) % 3; vk_shift = false; vk_caps = false; }
++    if (pressed_rep(24)) { std::string *t = edit_target(); vk_caret = utf8_prev(*t, std::min(vk_caret, t->size())); }
++    if (pressed_rep(25)) { std::string *t = edit_target(); vk_caret = utf8_next(*t, vk_caret); }
++    if (pressed(SDL_CONTROLLER_BUTTON_START)) vk_enter();
++    if (pressed(SDL_CONTROLLER_BUTTON_BACK)) {
++        if (dlg == PD_INPUT || dlg == PD_LOGIN) dialog_confirm(false);
++        else { vk_manual = false; vk_from_game = false; set_vk_visible(false); }
++    }
++    const auto &r2 = rows();
++    vk_cur_row = std::min(vk_cur_row, (int)r2.size() - 1);
++    vk_cur_col = std::min(vk_cur_col, (int)r2[vk_cur_row].size() - 1);
++}
++
++static void handle_dialog_pad()
++{
++    switch (dlg) {
++    case PD_MESSAGE:
++    case PD_INFO:
++        if (pressed(SDL_CONTROLLER_BUTTON_A) || pressed(SDL_CONTROLLER_BUTTON_B) || pressed(SDL_CONTROLLER_BUTTON_START))
++            dialog_confirm(true);
++        break;
++    case PD_QUESTION:
++        if (pressed_rep(VB_LEFT) || pressed_rep(VB_RIGHT)) dlg_choice ^= 1;
++        if (pressed(SDL_CONTROLLER_BUTTON_A) || pressed(SDL_CONTROLLER_BUTTON_START)) dialog_confirm(dlg_choice == 0);
++        if (pressed(SDL_CONTROLLER_BUTTON_B)) dialog_confirm(false);
++        break;
++    case PD_FILEPICK: {
++        int n = (int)dlg_files.size();
++        if (n > 0 && pressed_rep(VB_UP)) dlg_sel = (dlg_sel - 1 + n) % n;
++        if (n > 0 && pressed_rep(VB_DOWN)) dlg_sel = (dlg_sel + 1) % n;
++        if (n > 0 && pressed_rep(VB_LEFT)) dlg_sel = std::max(0, dlg_sel - 8);
++        if (n > 0 && pressed_rep(VB_RIGHT)) dlg_sel = std::min(n - 1, dlg_sel + 8);
++        if (pressed(SDL_CONTROLLER_BUTTON_A) || pressed(SDL_CONTROLLER_BUTTON_START)) dialog_confirm(n > 0);
++        if (pressed(SDL_CONTROLLER_BUTTON_B) || pressed(SDL_CONTROLLER_BUTTON_BACK)) dialog_confirm(false);
++        if (pressed(SDL_CONTROLLER_BUTTON_Y)) scan_files();
++        break;
++    }
++    default:
++        break;
++    }
++}
++
++bool ui_capture_pad()
++{
++    return dlg != PD_NONE || vk_visible;
++}
++
++void ui_update(SDL_GameController *pad, int win_w, int win_h)
++{
++    read_pad(pad);
++    Uint32 now = SDL_GetTicks();
++
++    if (pad_now[SDL_CONTROLLER_BUTTON_BACK] && pad_now[SDL_CONTROLLER_BUTTON_START]) {
++        if (!quit_combo_since) quit_combo_since = now;
++        else if (now - quit_combo_since > 150) {
++            if (!quit_requested) LOG("SELECT+START: quit\n");
++            quit_requested = true;
++        }
++        return;
++    }
++    quit_combo_since = 0;
++
++    /* keyboard button: show/hide the keyboard at any time */
++    const bool kb_was_visible = vk_visible;
++    const bool text_dialog = (dlg == PD_INPUT || dlg == PD_LOGIN);
++    int vkb = map_cfg_button(cfg_vk_button);
++    if (vkb >= 0 && pressed(vkb)) {
++        if (text_dialog) {
++            set_vk_visible(!vk_visible);
++        } else if (dlg == PD_NONE) {
++            if (vk_visible) {
++                vk_manual = false;
++                set_vk_visible(false);
++            } else {
++                vk_manual = true;
++                if (!vk_from_game) {
++                    extern const char *port_keyboard_string();
++                    const char *ks = port_keyboard_string();
++                    vk_text = ks ? ks : "";
++                }
++                vk_caret = vk_text.size();
++                set_vk_visible(true);
++            }
++        }
++    } else if (kb_was_visible) {
++        handle_keyboard_pad();
++    } else if (text_dialog) {
++        /* keyboard hidden inside a text dialog */
++        if (pressed(SDL_CONTROLLER_BUTTON_START) || pressed(SDL_CONTROLLER_BUTTON_A)) dialog_confirm(true);
++        else if (pressed(SDL_CONTROLLER_BUTTON_BACK) || pressed(SDL_CONTROLLER_BUTTON_B)) dialog_confirm(false);
++    } else if (dlg != PD_NONE) {
++        handle_dialog_pad();
++    }
++
++    /* pointer */
++    if (pad && cfg_ptr_stick >= 0) {
++        float ax = SDL_GameControllerGetAxis(pad, cfg_ptr_stick ? SDL_CONTROLLER_AXIS_RIGHTX : SDL_CONTROLLER_AXIS_LEFTX) / 32767.0f;
++        float ay = SDL_GameControllerGetAxis(pad, cfg_ptr_stick ? SDL_CONTROLLER_AXIS_RIGHTY : SDL_CONTROLLER_AXIS_LEFTY) / 32767.0f;
++        float mag = sqrtf(ax * ax + ay * ay);
++        float dt = g_last_ticks ? (now - g_last_ticks) / 1000.0f : 0.016f;
++        if (dt > 0.1f) dt = 0.1f;
++        if (ptr_x < 0) { ptr_x = win_w * 0.5f; ptr_y = win_h * 0.5f; }
++
++        /* press the toggle button (L2): pointer off / on.
++           Not while START is held too (SELECT+START = quit). */
++        int c1t = map_cfg_button(cfg_ptr_toggle);
++        bool held = c1t >= 0 && pad_now[c1t] && !pad_now[SDL_CONTROLLER_BUTTON_START] &&
++                    !vk_visible && dlg == PD_NONE;   /* L2 moves the text cursor there */
++        if (held && !ptr_toggle_was_held) ptr_click_down_at = now;
++        ptr_toggle_was_held = held;
++        if (held && !ptr_toggle_latched && now - ptr_click_down_at >= 0) {
++            ptr_enabled = !ptr_enabled;
++            ptr_toggle_latched = true;
++            ptr_visible = ptr_enabled;
++            ptr_last_move = now;
++            toast = ptr_enabled ? "Pointer ON" : "Pointer OFF (L2 to turn it on)";
++            toast_until = now + 2000;
++            LOG("pointer %s\n", ptr_enabled ? "on" : "off");
++        }
++        if (!held) ptr_toggle_latched = false;
++        if (!ptr_enabled) {
++            ptr_btn = false;
++            if (!ptr_enabled) ptr_visible = false;
++            g_last_ticks = now;
++            return;
++        }
++
++        if (mag > 0.18f) {
++            float k = (mag - 0.18f) / 0.82f;
++            float speed = (0.08f + 0.6f * k * k) * win_h * cfg_ptr_speed; /* px/s */
++            ptr_x += ax / mag * speed * dt;
++            ptr_y += ay / mag * speed * dt;
++            ptr_x = std::max(0.0f, std::min((float)win_w - 1, ptr_x));
++            ptr_y = std::max(0.0f, std::min((float)win_h - 1, ptr_y));
++            ptr_visible = true;
++            ptr_last_move = now;
++        }
++        int c1 = map_cfg_button(cfg_ptr_click), c2 = map_cfg_button(cfg_ptr_click2);
++        bool down = (c1 >= 0 && pad_now[c1]) || (c2 >= 0 && pad_now[c2]);
++        if (down) { ptr_visible = true; ptr_last_move = now; }
++        ptr_btn = down;
++        if (ptr_visible && now - ptr_last_move > 5000 && !down)
++            ptr_visible = false;
++    }
++    g_last_ticks = now;
++}
++
++bool ui_pointer_active()
++{
++    /* the pointer drives the game only while no overlay is open */
++    return ptr_visible && dlg == PD_NONE && !vk_visible;
++}
++
++void ui_pointer_state(int *x, int *y, Uint32 *buttons)
++{
++    *x = (int)ptr_x;
++    *y = (int)ptr_y;
++    *buttons = ptr_btn ? SDL_BUTTON_LMASK : 0;
++}
++
++/* Physical keyboard / mouse while the overlay is open */
++bool ui_handle_event(const SDL_Event *ev)
++{
++    bool text_dialog = (dlg == PD_INPUT || dlg == PD_LOGIN);
++    bool capture = text_dialog || vk_visible || dlg != PD_NONE;
++    if (!capture) return false;
++
++    if (g_imgui_ready) {
++        ImGuiIO &io = ImGui::GetIO();
++        if (ev->type == SDL_MOUSEMOTION) { io.AddMousePosEvent((float)ev->motion.x, (float)ev->motion.y); return true; }
++        if (ev->type == SDL_MOUSEBUTTONDOWN || ev->type == SDL_MOUSEBUTTONUP) {
++            if (ev->button.button == SDL_BUTTON_LEFT) {
++                io.AddMousePosEvent((float)ev->button.x, (float)ev->button.y);
++                io.AddMouseButtonEvent(0, ev->type == SDL_MOUSEBUTTONDOWN);
++            }
++            return true;
++        }
++    }
++    switch (ev->type) {
++    case SDL_TEXTINPUT:
++        if (text_dialog || vk_visible) vk_insert(ev->text.text);
++        return true;
++    case SDL_KEYDOWN:
++        switch (ev->key.keysym.sym) {
++        case SDLK_BACKSPACE: if (text_dialog || vk_visible) vk_backspace(); break;
++        case SDLK_LEFT: { std::string *t = edit_target(); vk_caret = utf8_prev(*t, std::min(vk_caret, t->size())); break; }
++        case SDLK_RIGHT: { std::string *t = edit_target(); vk_caret = utf8_next(*t, vk_caret); break; }
++        case SDLK_TAB: if (dlg == PD_LOGIN) { dlg_focus ^= 1; vk_caret = dlg_field[dlg_focus].size(); } break;
++        case SDLK_RETURN: case SDLK_KP_ENTER:
++            if (text_dialog || vk_visible) vk_enter(); else dialog_confirm(true);
++            break;
++        case SDLK_ESCAPE:
++            if (dlg != PD_NONE) dialog_confirm(false);
++            else { vk_manual = false; vk_from_game = false; set_vk_visible(false); }
++            break;
++        case SDLK_UP: if (dlg == PD_FILEPICK && !dlg_files.empty()) dlg_sel = std::max(0, dlg_sel - 1); break;
++        case SDLK_DOWN: if (dlg == PD_FILEPICK && !dlg_files.empty()) dlg_sel = std::min((int)dlg_files.size() - 1, dlg_sel + 1); break;
++        default: break;
++        }
++        return true;
++    case SDL_KEYUP:
++        return true;
++    default:
++        return false;
++    }
++}
++
++/* ------------------------------------------------------------------------ */
++/* Rendering                                                                */
++/* ------------------------------------------------------------------------ */
++static bool file_exists(const std::string &p) { return access(p.c_str(), R_OK) == 0; }
++
++static bool imgui_setup(int win_w, int win_h)
++{
++    if (g_imgui_ready) return true;
++    if (g_imgui_failed) return false;
++
++    IMGUI_CHECKVERSION();
++    ImGui::CreateContext();
++    ImGuiIO &io = ImGui::GetIO();
++    io.IniFilename = NULL;
++    io.LogFilename = NULL;
++    io.BackendFlags = 0;
++    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
++
++    float scale = std::min(win_w * 0.75f, (float)win_h) / 480.0f;
++    LOG("overlay for %dx%d\n", win_w, win_h);
++    if (scale < 0.75f) scale = 0.75f;
++    g_font_px = floorf(17.0f * scale);
++
++    static const ImWchar ranges[] = {
++        0x0020, 0x00FF, 0x0100, 0x017F, 0x0180, 0x024F, 0x0370, 0x03FF, 0x0400, 0x04FF,
++        0x1E00, 0x1EFF, 0x2000, 0x206F, 0x20A0, 0x20CF, 0x2190, 0x21FF, 0,
++    };
++    std::string font = getenv("PORT_FONT") ? getenv("PORT_FONT") : "fonts/NotoSans-Regular.ttf";
++    ImFontConfig cfg;
++    cfg.OversampleH = 1;
++    cfg.OversampleV = 1;
++    cfg.PixelSnapH = true;
++    if (file_exists(font) && io.Fonts->AddFontFromFileTTF(font.c_str(), g_font_px, &cfg, ranges)) {
++        LOG("font %s %.0fpx\n", font.c_str(), g_font_px);
++    } else {
++        ImFontConfig dc;
++        dc.SizePixels = 13.0f * std::max(1.0f, floorf(scale));
++        io.Fonts->AddFontDefault(&dc);
++        LOG("font: built-in\n");
++    }
++
++    ImGuiStyle &st = ImGui::GetStyle();
++    ImGui::StyleColorsDark(&st);
++    st.WindowRounding = 6.0f * scale;
++    st.FrameRounding = 4.0f * scale;
++    st.WindowBorderSize = 1.0f;
++    st.WindowPadding = ImVec2(8 * scale, 8 * scale);
++    st.ItemSpacing = ImVec2(4 * scale, 4 * scale);
++    st.Colors[ImGuiCol_WindowBg] = ImVec4(0.08f, 0.09f, 0.11f, 0.94f);
++    st.Colors[ImGuiCol_Button] = ImVec4(0.22f, 0.24f, 0.28f, 1.0f);
++    st.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.30f, 0.33f, 0.38f, 1.0f);
++    st.Colors[ImGuiCol_ButtonActive] = ImVec4(0.10f, 0.52f, 0.78f, 1.0f);
++
++    if (!ImGui_ImplOpenGL3_Init(NULL)) {
++        LOG("ImGui GLES2 backend init failed\n");
++        g_imgui_failed = true;
++        return false;
++    }
++    g_imgui_ready = true;
++    return true;
++}
++
++void ui_init(SDL_Window *win)
++{
++    g_win = win;
++    const char *ka = getenv("PORT_KEEP_ASPECT");
++    ar_on = (ka && atoi(ka)) ? 1 : 0;
++    const char *ar = getenv("PORT_ASPECT");   /* e.g. "16:9" */
++    if (ar && sscanf(ar, "%d:%d", &ar_num, &ar_den) != 2) { ar_num = 16; ar_den = 9; }
++    if (ar_num <= 0 || ar_den <= 0) { ar_num = 16; ar_den = 9; }
++    if (ar_on) ar_install_hooks();
++    cfg_vk_button = parse_button(getenv("PORT_KEYBOARD_BUTTON"), cfg_vk_button);
++    cfg_ptr_click = parse_button(getenv("PORT_POINTER_CLICK"), cfg_ptr_click);
++    cfg_ptr_toggle = parse_button(getenv("PORT_POINTER_TOGGLE"), cfg_ptr_toggle);
++    cfg_ptr_click2 = parse_button(getenv("PORT_POINTER_CLICK2"), cfg_ptr_click2);
++    const char *ps = getenv("PORT_POINTER_STICK");
++    if (ps) cfg_ptr_stick = !strcasecmp(ps, "left") ? 0 : (!strcasecmp(ps, "none") ? -1 : 1);
++    if (getenv("PORT_POINTER_SPEED")) cfg_ptr_speed = (float)atof(getenv("PORT_POINTER_SPEED"));
++    if (cfg_ptr_speed <= 0.05f) cfg_ptr_speed = 1.0f;
++    if (getenv("PORT_HINT")) cfg_hint = atoi(getenv("PORT_HINT")) != 0;
++    if (getenv("PORT_SHOW_FPS")) cfg_show_fps = atoi(getenv("PORT_SHOW_FPS")) != 0;
++    if (getenv("PORT_VK_HOLD_MS")) cfg_hold_ms = (Uint32)atoi(getenv("PORT_VK_HOLD_MS"));
++    if (cfg_hint) hint_until = SDL_GetTicks() + 7000;
++    SDL_StopTextInput();
++}
++
++static void draw_text_field(const char *label, const std::string &text, bool focused, bool masked, float width)
++{
++    ImDrawList *dl = ImGui::GetWindowDrawList();
++    if (label && *label) ImGui::TextUnformatted(label);
++    ImVec2 p = ImGui::GetCursorScreenPos();
++    float h = g_font_px + 10.0f;
++    ImU32 bg = focused ? IM_COL32(18, 20, 24, 255) : IM_COL32(30, 32, 38, 255);
++    ImU32 bd = focused ? IM_COL32(26, 158, 224, 255) : IM_COL32(80, 84, 92, 255);
++    dl->AddRectFilled(p, ImVec2(p.x + width, p.y + h), bg, 3.0f);
++    dl->AddRect(p, ImVec2(p.x + width, p.y + h), bd, 3.0f, 0, focused ? 2.0f : 1.0f);
++
++    std::string shown;
++    size_t caret_bytes = std::min(vk_caret, text.size());
++    std::string before;
++    if (masked) {
++        size_t n = 0, nb = 0;
++        for (size_t i = 0; i < text.size(); i = utf8_next(text, i)) { n++; if (i < caret_bytes) nb++; }
++        shown.assign(n, '*');
++        before.assign(nb, '*');
++    } else {
++        shown = text;
++        before = text.substr(0, caret_bytes);
++    }
++    ImFont *f = ImGui::GetFont();
++    float bw = f->CalcTextSizeA(g_font_px, FLT_MAX, 0, before.c_str()).x;
++    float scroll = 0;
++    if (bw > width - 16) scroll = bw - (width - 16);
++    dl->PushClipRect(ImVec2(p.x + 4, p.y), ImVec2(p.x + width - 4, p.y + h), true);
++    dl->AddText(f, g_font_px, ImVec2(p.x + 6 - scroll, p.y + 5), IM_COL32(240, 240, 240, 255), shown.c_str());
++    if (focused && (SDL_GetTicks() / 500) % 2 == 0) {
++        float cx = p.x + 6 - scroll + bw;
++        dl->AddLine(ImVec2(cx, p.y + 4), ImVec2(cx, p.y + h - 4), IM_COL32(26, 158, 224, 255), 2.0f);
++    }
++    dl->PopClipRect();
++    ImGui::Dummy(ImVec2(width, h));
++}
++
++static void draw_keyboard(float w, float h)
++{
++    const auto &r = rows();
++    float kb_h = std::min(h * 0.50f, std::max(h * 0.40f, 170.0f));
++    vk_height_px = (int)kb_h;
++    ImGui::SetNextWindowPos(ImVec2(0, h - kb_h));
++    ImGui::SetNextWindowSize(ImVec2(w, kb_h));
++    ImGui::SetNextWindowBgAlpha(0.94f);
++    ImGuiWindowFlags fl = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
++                          ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
++    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
++    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 4));
++    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
++    if (ImGui::Begin("##vk", NULL, fl)) {
++        float pad = 4, gap = 4;
++        float hint_h = g_font_px * 0.85f + 2;
++        float key_h = (kb_h - pad * 2 - gap * (r.size() - 1) - hint_h) / (float)r.size();
++        float usable = w - pad * 2;
++        for (int row = 0; row < (int)r.size(); row++) {
++            float units = 0;
++            for (auto &k : r[row]) units += k.w;
++            float unit_w = (usable - gap * (r[row].size() - 1)) / units;
++            ImGui::SetCursorPosX(pad);
++            for (int col = 0; col < (int)r[row].size(); col++) {
++                const Key &k = r[row][col];
++                bool sel = (row == vk_cur_row && col == vk_cur_col);
++                bool act = (k.act == K_SHIFT && vk_layer == 0 && (vk_shift || vk_caps));
++                if (sel) {
++                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.62f, 0.88f, 1.0f));
++                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.14f, 0.68f, 0.95f, 1.0f));
++                } else if (act || k.act == K_ENTER) {
++                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.36f, 0.50f, 1.0f));
++                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.42f, 0.58f, 1.0f));
++                }
++                char id[64];
++                snprintf(id, sizeof(id), "%s##k%d_%d", key_label(k), row, col);
++                if (ImGui::Button(id, ImVec2(unit_w * k.w, key_h))) {
++                    vk_cur_row = row; vk_cur_col = col;
++                    vk_press(k);
++                }
++                if (sel || act || k.act == K_ENTER) ImGui::PopStyleColor(2);
++                if (col + 1 < (int)r[row].size()) ImGui::SameLine();
++            }
++        }
++        ImGui::SetCursorPosX(pad + 2);
++        ImGui::TextDisabled("A type (hold: accents)  B del  X space  Y shift  L1/R1 layout  L2/R2 move  START enter  SELECT cancel");
++    }
++    ImGui::End();
++    ImGui::PopStyleVar(3);
++
++    if (vk_popup && !vk_variants.empty()) {
++        int n = (int)vk_variants.size();
++        float bw = g_font_px * 2.0f;
++        float pw = std::min(w - 8, n * (bw + 4) + 12);
++        ImGui::SetNextWindowPos(ImVec2((w - pw) * 0.5f, std::max(4.0f, h - kb_h - g_font_px * 2 - 28 - bw - 24)));
++        ImGui::SetNextWindowSize(ImVec2(pw, bw + 18));
++        if (ImGui::Begin("##vkvar", NULL, fl)) {
++            for (int i = 0; i < n; i++) {
++                bool sel = i == vk_variant_idx;
++                if (sel) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.62f, 0.88f, 1.0f));
++                char id[32];
++                snprintf(id, sizeof(id), "%s##v%d", vk_variants[i].c_str(), i);
++                if (ImGui::Button(id, ImVec2(bw, bw))) { vk_insert(vk_variants[i]); vk_popup = false; }
++                if (sel) ImGui::PopStyleColor();
++                if (i + 1 < n) ImGui::SameLine();
++            }
++        }
++        ImGui::End();
++    }
++}
++
++static void draw_dialog(float w, float h)
++{
++    ImGuiWindowFlags fl = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav;
++    float top_h = vk_visible ? (h - vk_height_px) : h;
++    float dw = std::min(w - 16, std::max(w * 0.8f, 300.0f));
++
++    if (dlg == PD_INPUT || dlg == PD_LOGIN) {
++        ImGui::SetNextWindowPos(ImVec2((w - dw) * 0.5f, 6));
++        ImGui::SetNextWindowSize(ImVec2(dw, 0));
++        if (ImGui::Begin("##dlg", NULL, fl | ImGuiWindowFlags_AlwaysAutoResize)) {
++            ImGui::PushTextWrapPos(dw - 16);
++            ImGui::TextUnformatted(dlg_caption.c_str());
++            ImGui::PopTextWrapPos();
++            ImGui::Spacing();
++            if (dlg == PD_INPUT) {
++                draw_text_field(NULL, dlg_field[0], true, false, dw - 16);
++            } else {
++                draw_text_field("User name", dlg_field[0], dlg_focus == 0, false, dw - 16);
++                if (ImGui::IsItemClicked()) { dlg_focus = 0; vk_caret = dlg_field[0].size(); }
++                draw_text_field("Password", dlg_field[1], dlg_focus == 1, true, dw - 16);
++                if (ImGui::IsItemClicked()) { dlg_focus = 1; vk_caret = dlg_field[1].size(); }
++            }
++            ImGui::TextDisabled(vk_visible ? "START: OK   SELECT: cancel" : "A/START: OK   B/SELECT: cancel   keyboard button: show keyboard");
++        }
++        ImGui::End();
++        return;
++    }
++
++    float dh_max = top_h - 20;
++    ImGui::SetNextWindowSize(ImVec2(dw, 0));
++    ImGui::SetNextWindowPos(ImVec2(w * 0.5f, top_h * 0.5f), 0, ImVec2(0.5f, 0.5f));
++    ImGui::SetNextWindowSizeConstraints(ImVec2(dw, 0), ImVec2(dw, dh_max));
++    if (ImGui::Begin("##dlg", NULL, fl | ImGuiWindowFlags_AlwaysAutoResize)) {
++        if (dlg == PD_FILEPICK) {
++            ImGui::TextUnformatted(dlg_caption.c_str());
++            ImGui::Separator();
++            if (dlg_files.empty()) {
++                ImGui::PushTextWrapPos(dw - 16);
++                ImGui::Text("No files found. Copy the files to import into:\n%s\nthen press Y to refresh.", dlg_dir.c_str());
++                ImGui::PopTextWrapPos();
++            } else {
++                float lh = std::min(dh_max - g_font_px * 4, (g_font_px + 6) * 10);
++                ImGui::BeginChild("##files", ImVec2(dw - 16, lh), false);
++                for (int i = 0; i < (int)dlg_files.size(); i++) {
++                    if (ImGui::Selectable(dlg_files[i].c_str(), i == dlg_sel)) {
++                        dlg_sel = i;
++                        dialog_confirm(true);
++                        break;
++                    }
++                    if (i == dlg_sel) ImGui::SetScrollHereY(0.5f);
++                }
++                ImGui::EndChild();
++            }
++            ImGui::TextDisabled("A: import   B: cancel   Y: refresh");
++        } else {
++            ImGui::PushTextWrapPos(dw - 16);
++            ImGui::TextUnformatted(dlg_caption.c_str());
++            ImGui::PopTextWrapPos();
++            ImGui::Spacing();
++            float bw = (dw - 24) * 0.5f;
++            if (dlg == PD_QUESTION) {
++                ImGui::PushStyleColor(ImGuiCol_Button, dlg_choice == 0 ? ImVec4(0.10f, 0.62f, 0.88f, 1) : ImVec4(0.22f, 0.24f, 0.28f, 1));
++                if (ImGui::Button("Yes", ImVec2(bw, 0))) dialog_confirm(true);
++                ImGui::PopStyleColor();
++                ImGui::SameLine();
++                ImGui::PushStyleColor(ImGuiCol_Button, dlg_choice == 1 ? ImVec4(0.10f, 0.62f, 0.88f, 1) : ImVec4(0.22f, 0.24f, 0.28f, 1));
++                if (dlg != PD_NONE && ImGui::Button("No", ImVec2(bw, 0))) dialog_confirm(false);
++                ImGui::PopStyleColor();
++            } else {
++                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.62f, 0.88f, 1));
++                if (ImGui::Button("OK", ImVec2(dw - 16, 0))) dialog_confirm(true);
++                ImGui::PopStyleColor();
++            }
++        }
++    }
++    ImGui::End();
++}
++
++/* white cartoon glove pointing up-left; the tip of the index finger is the
++   hot spot. Built from capsules: black outline pass, then white fill. */
++struct Capsule { float ax, ay, bx, by, r; };
++static void capsule_poly(ImDrawList *dl, ImVec2 o, float s, float cs, float sn,
++                         const Capsule &c, float grow, ImU32 col)
++{
++    ImVec2 pts[26];
++    int n = 0;
++    float dx = c.bx - c.ax, dy = c.by - c.ay;
++    float base = atan2f(dy, dx);
++    float r = c.r * s + grow;
++    for (int end = 0; end < 2; end++) {
++        float cx = (end ? c.bx : c.ax) * s, cy = (end ? c.by : c.ay) * s;
++        float a0 = base + (end ? -1.5707963f : 1.5707963f);
++        for (int i = 0; i <= 12; i++) {
++            float a = a0 + 3.14159265f * i / 12.0f;
++            float x = cx + cosf(a) * r, y = cy + sinf(a) * r;
++            pts[n++] = ImVec2(o.x + x * cs - y * sn, o.y + x * sn + y * cs);
++        }
++    }
++    dl->AddConvexPolyFilled(pts, n, col);
++}
++
++static void draw_pointer(ImDrawList *dl)
++{
++    static const Capsule parts[] = {
++        { 0.00f, 0.11f, 0.00f, 0.56f, 0.11f },   /* index finger */
++        { 0.22f, 0.50f, 0.22f, 0.60f, 0.10f },   /* curled fingers */
++        { 0.40f, 0.52f, 0.40f, 0.62f, 0.10f },
++        { 0.56f, 0.56f, 0.56f, 0.66f, 0.09f },
++        { 0.12f, 0.74f, 0.44f, 0.74f, 0.22f },   /* palm */
++        {-0.13f, 0.62f, 0.05f, 0.82f, 0.09f },   /* thumb */
++        { 0.04f, 1.04f, 0.50f, 1.04f, 0.13f },   /* cuff */
++    };
++    const int n = sizeof(parts) / sizeof(parts[0]);
++    float s = g_font_px * 1.5f;
++    float ang = -0.35f;
++    float cs = cosf(ang), sn = sinf(ang);
++    ImVec2 o(floorf(ptr_x), floorf(ptr_y));
++    float line = s > 30 ? 2.5f : 2.0f;
++    ImU32 ink = IM_COL32(20, 20, 20, 255);
++    ImU32 fill = ptr_btn ? IM_COL32(255, 236, 140, 255) : IM_COL32(255, 255, 255, 255);
++    ImU32 shade = ptr_btn ? IM_COL32(222, 196, 90, 255) : IM_COL32(205, 210, 220, 255);
++    for (int i = 0; i < n; i++) capsule_poly(dl, o, s, cs, sn, parts[i], line, ink);
++    for (int i = 0; i < n; i++) capsule_poly(dl, o, s, cs, sn, parts[i], 0, fill);
++    /* cuff band and knuckle lines */
++    Capsule band = { 0.04f, 1.04f, 0.50f, 1.04f, 0.05f };
++    capsule_poly(dl, o, s, cs, sn, band, 0, shade);
++    auto P = [&](float x, float y) { x *= s; y *= s; return ImVec2(o.x + x * cs - y * sn, o.y + x * sn + y * cs); };
++    dl->AddLine(P(0.11f, 0.50f), P(0.11f, 0.64f), ink, line * 0.7f);
++    dl->AddLine(P(0.31f, 0.50f), P(0.31f, 0.64f), ink, line * 0.7f);
++    dl->AddLine(P(0.48f, 0.53f), P(0.48f, 0.66f), ink, line * 0.7f);
++}
++
++void ui_draw(int win_w, int win_h)
++{
++    ar_clear_bars(win_w, win_h);
++    Uint32 now = SDL_GetTicks();
++    bool hint = cfg_hint && now < hint_until;
++    bool need = vk_visible || dlg != PD_NONE || ptr_visible || hint || now < toast_until || cfg_show_fps;
++    if (!need) return;
++    if (!imgui_setup(win_w, win_h)) return;
++
++    /* save GL state ImGui's ES2 backend does not restore */
++    GLint fbo = 0, ebo = 0, vao = 0, attr_on[8];
++    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &fbo);
++    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &ebo);
++    if (glad_glBindVertexArrayOES) glGetIntegerv(GL_VERTEX_ARRAY_BINDING_OES, &vao);
++    for (int i = 0; i < 8; i++) glGetVertexAttribiv(i, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &attr_on[i]);
++    if (vao && glad_glBindVertexArrayOES) glBindVertexArrayOES(0);
++    if (fbo) glBindFramebuffer(GL_FRAMEBUFFER, 0);
++
++    ImGuiIO &io = ImGui::GetIO();
++    io.DisplaySize = ImVec2((float)win_w, (float)win_h);
++    io.DeltaTime = 1.0f / 60.0f;
++    if (ptr_visible) {
++        io.AddMousePosEvent(ptr_x, ptr_y);
++        static bool last_btn = false;
++        if (ptr_btn != last_btn && (vk_visible || dlg != PD_NONE)) io.AddMouseButtonEvent(0, ptr_btn);
++        last_btn = ptr_btn;
++    }
++
++    ImGui_ImplOpenGL3_NewFrame();
++    ImGui::NewFrame();
++
++    if (dlg != PD_NONE) {
++        /* dim the game behind modal dialogs */
++        ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0, 0), ImVec2((float)win_w, (float)win_h), IM_COL32(0, 0, 0, 110));
++        draw_dialog((float)win_w, (float)win_h);
++    }
++    if (vk_visible) {
++        if (dlg == PD_NONE) {
++            /* show what is being typed */
++            float fw = std::min(win_w - 16.0f, std::max(win_w * 0.7f, 280.0f));
++            ImGui::SetNextWindowPos(ImVec2((win_w - fw) * 0.5f, win_h - vk_height_px - g_font_px * 2 - 28));
++            ImGui::SetNextWindowSize(ImVec2(fw, 0));
++            if (ImGui::Begin("##vkline", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize))
++                draw_text_field(NULL, vk_text, true, false, fw - 16);
++            ImGui::End();
++        }
++        draw_keyboard((float)win_w, (float)win_h);
++    }
++    if (hint && dlg == PD_NONE && !vk_visible) {
++        float a = std::min(1.0f, (hint_until - now) / 800.0f);
++        ImGui::SetNextWindowPos(ImVec2(win_w * 0.5f, 8), 0, ImVec2(0.5f, 0));
++        ImGui::SetNextWindowBgAlpha(0.75f * a);
++        if (ImGui::Begin("##hint", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs)) {
++            ImGui::PushStyleVar(ImGuiStyleVar_Alpha, a);
++            ImGui::Text("Pointer: %s stick, %s click, %s on/off    Quit: SELECT+START",
++                        cfg_ptr_stick == 0 ? "left" : "right",
++                        cfg_ptr_click == SDL_CONTROLLER_BUTTON_RIGHTSTICK ? "R3" : "button",
++                        cfg_ptr_toggle == 100 ? "L2" : cfg_ptr_toggle == 101 ? "R2" : (cfg_ptr_toggle == SDL_CONTROLLER_BUTTON_BACK ? "SELECT" : "button"));
++            ImGui::PopStyleVar();
++        }
++        ImGui::End();
++    }
++    if (now < toast_until && !toast.empty()) {
++        ImGui::SetNextWindowPos(ImVec2(win_w * 0.5f, win_h - 8.0f), 0, ImVec2(0.5f, 1.0f));
++        ImGui::SetNextWindowBgAlpha(0.8f);
++        if (ImGui::Begin("##toast", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs))
++            ImGui::TextUnformatted(toast.c_str());
++        ImGui::End();
++    }
++    if (cfg_show_fps) {
++        char b[32];
++        snprintf(b, sizeof(b), "%.0f FPS", port_fps());
++        ImDrawList *dl = ImGui::GetForegroundDrawList();
++        dl->AddText(ImVec2(7, 5), IM_COL32(0, 0, 0, 255), b);
++        dl->AddText(ImVec2(6, 4), IM_COL32(255, 255, 80, 255), b);
++    }
++    if (ptr_visible)
++        draw_pointer(ImGui::GetForegroundDrawList());
++
++    ImGui::Render();
++    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
++
++    for (int i = 0; i < 8; i++) {
++        if (attr_on[i]) glEnableVertexAttribArray(i);
++        else glDisableVertexAttribArray(i);
++    }
++    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
++    if (vao && glad_glBindVertexArrayOES) glBindVertexArrayOES(vao);
++    if (fbo) glBindFramebuffer(GL_FRAMEBUFFER, fbo);
++}
+diff --git a/jni/classes/lang.cpp b/jni/classes/lang.cpp
+new file mode 100644
+index 0000000..64ef332
+--- /dev/null
++++ b/jni/classes/lang.cpp
+@@ -0,0 +1,66 @@
++/*
++ * Minimal java.lang.Object / java.lang.Double, needed by the runner to pass
++ * real values to and from Java extension functions (CallExtensionFunction).
++ */
++#include <new>
++#include <stdlib.h>
++#include <string.h>
++
++#include "jni.h"
++#include "jni_internals.h"
++#include "lang.h"
++
++/* java.lang.Object ------------------------------------------------------- */
++const ManagedMethod JObjectMethods[] = {
++    {NULL}
++};
++
++Class JObject::clazz = {
++    .classpath = "java/lang/Object",
++    .classname = "Object",
++    .managed_methods = JObjectMethods,
++    .native_methods = NULL,
++    .fields = NULL,
++    .instance_size = sizeof(void *)
++};
++
++/* java.lang.Double ------------------------------------------------------- */
++JDouble::JDouble(double v) : value(v) {}
++
++void JDouble::init(JNIEnv *env, jobject obj, jclass clz, jdouble v)
++{
++    new (obj) JDouble(v);
++}
++
++jdouble JDouble::doubleValue(JNIEnv *env, jobject obj)
++{
++    return obj ? ((JDouble *)obj)->value : 0.0;
++}
++
++const ManagedMethod JDoubleMethods[] = {
++    REGISTER_INIT_METHOD(JDouble, JDouble::init, "(D)V"),
++    ManagedMethod::Register<&JDouble::doubleValue>(JDouble::clazz, "doubleValue", "()D"),
++    {NULL}
++};
++
++const FieldId JDoubleFields[] = {
++    {NULL},
++};
++
++Class JDouble::clazz = {
++    .classpath = "java/lang/Double",
++    .classname = "Double",
++    .managed_methods = JDoubleMethods,
++    .native_methods = NULL,
++    .fields = JDoubleFields,
++    .instance_size = sizeof(JDouble)
++};
++
++JDouble *JDouble::make(double v)
++{
++    void *mem = calloc(1, sizeof(JDouble));
++    return new (mem) JDouble(v);
++}
++
++static const int registered_obj = ClassRegistry::register_class(JObject::clazz);
++static const int registered_dbl = ClassRegistry::register_class(JDouble::clazz);
+diff --git a/jni/classes/lang.h b/jni/classes/lang.h
+new file mode 100644
+index 0000000..49ae616
+--- /dev/null
++++ b/jni/classes/lang.h
+@@ -0,0 +1,22 @@
++#pragma once
++#include "jni.h"
++#include "jni_internals.h"
++
++class JObject : public Object {
++public:
++    static Class clazz;
++    Class *_getClass() { return &clazz; }
++};
++
++class JDouble : public Object {
++public:
++    static Class clazz;
++    Class *_getClass() { return &clazz; }
++
++    double value;
++    JDouble(double v);
++
++    static void init(JNIEnv *env, jobject obj, jclass clz, jdouble v);
++    static jdouble doubleValue(JNIEnv *env, jobject obj);
++    static JDouble *make(double v);
++};
+diff --git a/jni/classes/media_AudioTrack.cpp b/jni/classes/media_AudioTrack.cpp
+index 1441d99..1ff3988 100644
+--- a/jni/classes/media_AudioTrack.cpp
++++ b/jni/classes/media_AudioTrack.cpp
+@@ -1,4 +1,6 @@
+ #include <vector>
++#include <string.h>
++#include <stdlib.h>
+ #include <SDL2/SDL.h>
+ 
+ #include "platform.h"
+@@ -27,20 +29,61 @@ static int GetSDLFormatBytes(int audioFormat)
+ }
+ 
+ AudioTrack::AudioTrack(int streamType, int sampleRateInHz, int channelConfig, int audioFormat, int bufferSizeInBytes, int mode)
+-{    
++{
+     SDL_zero(desired);
+     desired.freq = sampleRateInHz;
+     desired.format = GetSDLFormat(audioFormat);
+     desired.channels = (channelConfig == 4) ? 1 : 2;
+-    desired.samples = bufferSizeInBytes / (desired.channels * GetSDLFormatBytes(audioFormat));
+-    desired.callback = NULL;
++    bytes_per_frame = desired.channels * GetSDLFormatBytes(audioFormat);
++    /* small device buffer for low latency; the ring absorbs the jitter */
++    int frames = bufferSizeInBytes / bytes_per_frame;
++    int pow2 = 256;
++    while (pow2 < frames && pow2 < 4096) pow2 <<= 1;
++    desired.samples = pow2;
++    desired.callback = AudioTrack::callback;
++    desired.userdata = this;
+     playing = 0;
+-    
++    peak = 0;
++    heard = 0;
++    total = 0;
++
++    ring_size = bufferSizeInBytes * 3;
++    if (ring_size < 8192) ring_size = 8192;
++    ring = (Uint8 *)calloc(1, ring_size);
++    ring_r = ring_w = ring_fill = 0;
++    lock = SDL_CreateMutex();
++    cond = SDL_CreateCond();
++
+     needed_bytes = bufferSizeInBytes;
+     deviceId = SDL_OpenAudioDevice(NULL, 0, &desired, &obtained, 0);
++    if (deviceId == 0) {
++        warning("AudioTrack: SDL_OpenAudioDevice(%d Hz, %d ch) failed: %s\n", desired.freq, desired.channels, SDL_GetError());
++    } else {
++        warning("AudioTrack: %d Hz %d ch fmt 0x%x buf %d -> device %u (driver %s, %d Hz, %d samples)\n",
++                sampleRateInHz, desired.channels, audioFormat, bufferSizeInBytes, deviceId,
++                SDL_GetCurrentAudioDriver() ? SDL_GetCurrentAudioDriver() : "?", obtained.freq, obtained.samples);
++    }
++    started_at = stats_at = SDL_GetTicks();
+     this->mode = mode;
+ }
+ 
++void SDLCALL AudioTrack::callback(void *ud, Uint8 *stream, int len)
++{
++    AudioTrack *t = (AudioTrack *)ud;
++    SDL_LockMutex(t->lock);
++    int n = len < t->ring_fill ? len : t->ring_fill;
++    int first = t->ring_size - t->ring_r;
++    if (first > n) first = n;
++    memcpy(stream, t->ring + t->ring_r, first);
++    if (n > first) memcpy(stream + first, t->ring, n - first);
++    t->ring_r = (t->ring_r + n) % t->ring_size;
++    t->ring_fill -= n;
++    SDL_CondSignal(t->cond);
++    SDL_UnlockMutex(t->lock);
++    if (n < len)
++        memset(stream + n, t->desired.format == AUDIO_U8 ? 0x80 : 0, len - n);
++}
++
+ static void AudioClass_ctor1(JNIEnv *env, jobject obj, jclass clazz, int streamType, int sampleRateInHz, int channelConfig, int audioFormat, int bufferSizeInBytes, int mode)
+ {
+     AudioTrack *track = new (obj) AudioTrack(streamType, sampleRateInHz, channelConfig, audioFormat, bufferSizeInBytes, mode);
+@@ -68,7 +111,9 @@ void AudioTrack::stop(JNIEnv *env, jobject obj, jclass clazz)
+ void AudioTrack::release(JNIEnv *env, jobject obj, jclass clazz)
+ {
+     AudioTrack *track = (AudioTrack*)obj;
+-    SDL_ClearQueuedAudio(track->deviceId);
++    SDL_LockMutex(track->lock);
++    track->ring_r = track->ring_w = track->ring_fill = 0;
++    SDL_UnlockMutex(track->lock);
+ }
+ 
+ int AudioTrack::write(JNIEnv *env, jobject obj, jclass clazz, jbyteArray audioData, int offsetInBytes, int sizeInBytes)
+@@ -76,29 +121,60 @@ int AudioTrack::write(JNIEnv *env, jobject obj, jclass clazz, jbyteArray audioDa
+     return AudioTrack::write(env, obj, clazz, audioData, offsetInBytes, sizeInBytes, WRITE_BLOCKING);
+ }
+ 
+-
+ int AudioTrack::write(JNIEnv *env, jobject obj, jclass clazz, jbyteArray audioData, int offsetInBytes, int sizeInBytes, int writeMode)
+ {
+-    Class *clz = (Class*)clazz;
+     AudioTrack *track = (AudioTrack*)obj;
+     ArrayObject *data = (ArrayObject*)audioData;
+-    uintptr_t where = (uintptr_t)data->elements + offsetInBytes;
+-
+-    int ret = SDL_QueueAudio(track->deviceId, (void*)where, sizeInBytes);
++    const Uint8 *src = (const Uint8 *)data->elements + offsetInBytes;
+ 
+     if (track->playing == 0)
+         AudioTrack::play(env, obj, clazz);
++    if (track->deviceId == 0) {
++        SDL_Delay(sizeInBytes * 1000 / (track->desired.freq * track->bytes_per_frame) + 1);
++        return sizeInBytes;
++    }
+ 
+-    if (writeMode == WRITE_BLOCKING) {
+-        do {
+-            SDL_Delay(0);
+-        } while (SDL_GetQueuedAudioSize(track->deviceId));
++    /* level meter for the log (16-bit only) */
++    if (track->desired.format == AUDIO_S16) {
++        const Sint16 *p = (const Sint16 *)src;
++        for (int i = 0; i < sizeInBytes / 2; i += 7) {
++            int v = p[i] < 0 ? -p[i] : p[i];
++            if (v > track->peak) track->peak = v;
++        }
++    }
++    track->total += sizeInBytes;
++    Uint32 now = SDL_GetTicks();
++    if (!track->heard && track->peak > 64) {
++        track->heard = 1;
++        warning("AudioTrack: first sound after %.1f s\n", (now - track->started_at) / 1000.0);
++    }
++    if (now - track->stats_at > (Uint32)(getenv("PORT_DEBUG_AUDIO") ? 5000 : 30000) && now - track->started_at < 300000) {
++        warning("AudioTrack: %llu KB played, peak %d\n", track->total >> 10, track->peak);
++        track->stats_at = now;
++        track->peak = 0;
+     }
+ 
+-    if (ret == 0)
+-        return sizeInBytes;
+-    else
+-        return 0;
++    int written = 0;
++    SDL_LockMutex(track->lock);
++    while (written < sizeInBytes) {
++        int space = track->ring_size - track->ring_fill;
++        if (space == 0) {
++            if (writeMode != WRITE_BLOCKING) break;
++            SDL_CondWaitTimeout(track->cond, track->lock, 100);
++            continue;
++        }
++        int n = sizeInBytes - written;
++        if (n > space) n = space;
++        int first = track->ring_size - track->ring_w;
++        if (first > n) first = n;
++        memcpy(track->ring + track->ring_w, src + written, first);
++        if (n > first) memcpy(track->ring, src + written + first, n - first);
++        track->ring_w = (track->ring_w + n) % track->ring_size;
++        track->ring_fill += n;
++        written += n;
++    }
++    SDL_UnlockMutex(track->lock);
++    return written;
+ }
+ 
+ const FieldId mediaAudioTrackClassFields[] = {
+diff --git a/jni/classes/media_AudioTrack.h b/jni/classes/media_AudioTrack.h
+index 473e2e2..842b2e6 100644
+--- a/jni/classes/media_AudioTrack.h
++++ b/jni/classes/media_AudioTrack.h
+@@ -23,7 +23,18 @@ public:
+     static int write(JNIEnv *env, jobject obj, jclass clazz, jbyteArray audioData, int offsetInBytes, int sizeInBytes);
+     static int write(JNIEnv *env, jobject obj, jclass clazz, jbyteArray audioData, int offsetInBytes, int sizeInBytes, int writeMode);
+ 
++    static void SDLCALL callback(void *ud, Uint8 *stream, int len);
++
+     unsigned int needed_bytes;
++    /* ring buffer fed by write(), drained by the SDL callback */
++    Uint8 *ring;
++    int ring_size, ring_r, ring_w, ring_fill;
++    SDL_mutex *lock;
++    SDL_cond *cond;
++    int bytes_per_frame;
++    Uint32 started_at, stats_at;
++    int peak, heard;
++    unsigned long long total;
+     SDL_AudioSpec desired, obtained;
+     SDL_AudioDeviceID deviceId;
+     int playing;
+diff --git a/jni/jni.cpp b/jni/jni.cpp
+index 499ad17..18e77ee 100755
+--- a/jni/jni.cpp
++++ b/jni/jni.cpp
+@@ -24,32 +24,23 @@ template <typename T> ABI_ATTR static T iface_CallNonVirtualMethodA(JNIEnv *env,
+ 
+ ABI_ATTR static jobjectArray iface_NewObjectArray(JNIEnv *env, jsize len, jclass clz, jobject init)
+ {
+-    Class *clazz = (Class*)clz;
+-    Object *first_elem = (Object*)init;
+-    if (first_elem == NULL)
+-        return NULL;
+-
+-    if (clazz->instance_size == 0)
++    /* Object arrays hold references (pointers), like a real JVM. */
++    if (len < 0)
+         return NULL;
+ 
+     ArrayObject *arr = (ArrayObject*)calloc(1, sizeof(ArrayObject));
+     if (arr == NULL)
+         return NULL;
+ 
+-    arr->instance_clazz = clazz;
++    arr->instance_clazz = (Class*)clz;
+     arr->count = len;
+-    arr->element_size = clazz->instance_size;
+-    arr->elements = (Object*)malloc(clazz->instance_size * len);
+-
+-    if (arr->elements == NULL) {
+-        free(arr);
++    arr->element_size = sizeof(Object*);
++    arr->elements = calloc(len ? len : 1, sizeof(Object*));
++    if (arr->elements == NULL)
+         return NULL;
+-    }
+ 
+-    for (jsize i = 0; i < len; i++) {
+-        uintptr_t offs = (uintptr_t)arr->elements + (arr->element_size * i);
+-        memcpy((void*)offs, first_elem, arr->element_size);
+-    }
++    for (jsize i = 0; i < len; i++)
++        ((Object**)arr->elements)[i] = (Object*)init;
+ 
+     return (jobjectArray)arr;
+ }
+@@ -71,8 +62,10 @@ ABI_ATTR static jclass iface_FindClass(JNIEnv *env, const char* name)
+     auto registry = ClassRegistry::get_class_registry();
+     auto it = std::find_if(registry.begin(), registry.end(),
+         [&](auto *item) { return strcmp(name, item->classpath) == 0; });
+-    if (it == registry.end())
++    if (it == registry.end()) {
++        warning("FindClass: '%s' not emulated.\n", name);
+         return NULL;
++    }
+ 
+     return (jclass)*it;
+ }
+@@ -246,8 +239,18 @@ ABI_ATTR static jclass iface_GetObjectClass(JNIEnv *env, jobject jobj)
+ 
+ ABI_ATTR static jboolean iface_IsInstanceOf(JNIEnv *env, jobject jobj, jclass jclazz)
+ {
+-    WARN_STUB;
+-    return JNI_FALSE;
++    Object *obj = (Object*)jobj;
++    Class *clazz = (Class*)jclazz;
++    if (obj == NULL)
++        return JNI_TRUE; /* null is an instance of anything in JNI */
++    if (clazz == NULL)
++        return JNI_FALSE;
++    if (strcmp(clazz->classpath, "java/lang/Object") == 0)
++        return JNI_TRUE;
++    Class *oc = obj->_getClass();
++    if (oc == NULL)
++        return JNI_FALSE;
++    return (oc == clazz || strcmp(oc->classpath, clazz->classpath) == 0) ? JNI_TRUE : JNI_FALSE;
+ }
+ 
+ ABI_ATTR static jmethodID iface_GetMethodID(JNIEnv *env, jclass clazz, const char* name, const char* sig)
+@@ -375,18 +378,17 @@ ABI_ATTR static jsize iface_GetArrayLength(JNIEnv *env, jarray jarr)
+ ABI_ATTR static jobject iface_GetObjectArrayElement(JNIEnv *env, jobjectArray jarr, jsize index)
+ {
+     ArrayObject* arr = (ArrayObject*)jarr;
+-    uintptr_t offs = (uintptr_t)arr->elements + (index * arr->element_size);
+-    return (jobject)(offs);
++    if (arr == NULL || index < 0 || index >= arr->count)
++        return NULL;
++    return (jobject)((Object**)arr->elements)[index];
+ }
+ 
+ ABI_ATTR static void iface_SetObjectArrayElement(JNIEnv *env, jobjectArray jarr, jsize index, jobject jobj)
+ {
+     ArrayObject* arr = (ArrayObject*)jarr;
+-    if (jarr == NULL)
++    if (arr == NULL || index < 0 || index >= arr->count)
+         return;
+-
+-    uintptr_t offs = (intptr_t)arr->elements + (arr->element_size * index);
+-    memcpy((void*)offs, (void*)jobj, arr->element_size);
++    ((Object**)arr->elements)[index] = (Object*)jobj;
+ }
+ 
+ ABI_ATTR static jint iface_RegisterNatives(JNIEnv *env, jclass jclazz,
+diff --git a/scripts/generate_libc.py b/scripts/generate_libc.py
+index 063c36c..0e3886d 100644
+--- a/scripts/generate_libc.py
++++ b/scripts/generate_libc.py
+@@ -205,7 +205,8 @@ if __name__ == '__main__':
+         cl.Config.set_library_file(args.llvm_library_file)
+ 
+     if args.llvm_includes:
+-        includes.extend(['-I{}'.format(path) for path in args.llvm_includes])
++        includes.extend(['-nostdinc', '-nostdinc++'])
++        includes.extend(['-isystem{}'.format(path) for path in args.llvm_includes])
+ 
+     arch=args.arch
+     target_platform="--target={arch}".format(arch=arch)
+diff --git a/thunks/libc/ci_files.cpp b/thunks/libc/ci_files.cpp
+new file mode 100644
+index 0000000..5c52a31
+--- /dev/null
++++ b/thunks/libc/ci_files.cpp
+@@ -0,0 +1,158 @@
++/*
++ * Case-insensitive file names in the game's save folders.
++ *
++ * The Android runner does not always use the same case for a file name
++ * (e.g. writes "Settings351.dat", later reads "settings351.dat"). Android's
++ * app storage tolerates it in practice, Linux does not: when a file is not
++ * found under the save / storage folders, look for a name that differs only
++ * in case and use that one instead.
++ */
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <strings.h>
++#include <errno.h>
++#include <dirent.h>
++#include <unistd.h>
++#include <sys/stat.h>
++#include <string>
++
++#include "platform.h"
++
++extern "C" const char *port_save_dir_cstr(void);   /* gmloader/port_ext.cpp */
++
++static bool in_game_dirs(const char *path)
++{
++    if (!path || path[0] != '/') return false;
++    static std::string sd;
++    if (sd.empty() && port_save_dir_cstr() && *port_save_dir_cstr()) {
++        sd = port_save_dir_cstr();
++        if (sd[0] != '/') {
++            char cwd[4096];
++            if (getcwd(cwd, sizeof(cwd))) sd = std::string(cwd) + "/" + sd;
++        }
++        while (sd.size() > 1 && sd.back() == '/') sd.pop_back();
++    }
++    if (!sd.empty() && strncmp(path, sd.c_str(), sd.size()) == 0) return true;
++    const char *envs[] = {"PORT_STORAGE", "PORT_FILES"};
++    for (const char *e : envs) {
++        const char *d = getenv(e);
++        if (d && *d && strncmp(path, d, strlen(d)) == 0) return true;
++    }
++    return false;
++}
++
++/* Resolve every path component case-insensitively; true if it exists. */
++static bool ci_resolve(const char *path, std::string &out)
++{
++    if (!in_game_dirs(path)) return false;
++    std::string cur;
++    const char *p = path;
++    while (*p == '/') p++;
++    cur = "";
++    bool changed = false;
++    while (*p) {
++        const char *e = strchr(p, '/');
++        std::string comp = e ? std::string(p, e - p) : std::string(p);
++        std::string cand = cur + "/" + comp;
++        struct stat st;
++        if (::stat(cand.c_str(), &st) != 0) {
++            DIR *d = opendir(cur.empty() ? "/" : cur.c_str());
++            bool found = false;
++            if (d) {
++                struct dirent *de;
++                while ((de = readdir(d))) {
++                    if (strcasecmp(de->d_name, comp.c_str()) == 0) {
++                        cand = cur + "/" + de->d_name;
++                        found = true;
++                        changed = true;
++                        break;
++                    }
++                }
++                closedir(d);
++            }
++            if (!found) return false;
++        }
++        cur = cand;
++        if (!e) break;
++        p = e + 1;
++        while (*p == '/') p++;
++    }
++    if (!changed) return false;
++    out = cur;
++    return true;
++}
++
++extern "C" ABI_ATTR FILE *fopen_impl(const char *path, const char *mode)
++{
++    FILE *f = ::fopen(path, mode);
++    if (f || errno != ENOENT) return f;
++    std::string alt;
++    if (ci_resolve(path, alt)) {
++        f = ::fopen(alt.c_str(), mode);
++        if (!f) errno = ENOENT;
++    } else if (mode && mode[0] != 'r') {
++        /* creating: the parent folder may differ in case */
++        std::string dir(path), base;
++        size_t sl = dir.find_last_of('/');
++        if (sl != std::string::npos && sl > 0) {
++            base = dir.substr(sl);
++            dir = dir.substr(0, sl);
++            std::string adir;
++            if (ci_resolve(dir.c_str(), adir))
++                f = ::fopen((adir + base).c_str(), mode);
++        }
++        if (!f) errno = ENOENT;
++    }
++    return f;
++}
++
++extern "C" ABI_ATTR FILE *fopen64_impl(const char *path, const char *mode)
++{
++    return fopen_impl(path, mode);
++}
++
++extern "C" ABI_ATTR int stat_impl(const char *path, struct stat *st)
++{
++    int r = ::stat(path, st);
++    if (r == 0 || errno != ENOENT) return r;
++    std::string alt;
++    if (ci_resolve(path, alt)) return ::stat(alt.c_str(), st);
++    errno = ENOENT;
++    return -1;
++}
++
++extern "C" ABI_ATTR int access_impl(const char *path, int mode)
++{
++    int r = ::access(path, mode);
++    if (r == 0 || errno != ENOENT) return r;
++    std::string alt;
++    if (ci_resolve(path, alt)) return ::access(alt.c_str(), mode);
++    errno = ENOENT;
++    return -1;
++}
++
++extern "C" ABI_ATTR int remove_impl(const char *path)
++{
++    int r = ::remove(path);
++    if (r == 0 || errno != ENOENT) return r;
++    std::string alt;
++    if (ci_resolve(path, alt)) return ::remove(alt.c_str());
++    errno = ENOENT;
++    return -1;
++}
++
++extern "C" ABI_ATTR int unlink_impl(const char *path)
++{
++    int r = ::unlink(path);
++    if (r == 0 || errno != ENOENT) return r;
++    std::string alt;
++    if (ci_resolve(path, alt)) return ::unlink(alt.c_str());
++    errno = ENOENT;
++    return -1;
++}
++
++extern "C" ABI_ATTR int stat64_impl(const char *path, struct stat *st)
++{
++    return stat_impl(path, st);
++}
+diff --git a/thunks/libc/misc.cpp b/thunks/libc/misc.cpp
+index 3f68565..d1056b2 100644
+--- a/thunks/libc/misc.cpp
++++ b/thunks/libc/misc.cpp
+@@ -1,3 +1,5 @@
++#include <sys/syscall.h>
++#include <unistd.h>
+ #include <errno.h>
+ #include <string.h>
+ #include <fcntl.h>
+@@ -32,7 +34,7 @@ extern "C" ABI_ATTR int login_tty_impl(int fd)
+ extern "C" ABI_ATTR long syscall_impl(long number, ...)
+ {
+     if (number == 0xb2)
+-        return gettid();
++        return (long)::syscall(SYS_gettid); /* gettid() needs glibc >= 2.30 */
+     
+     return 0;
+ }
+diff --git a/thunks/zlib/zlib.cpp b/thunks/zlib/zlib.cpp
+index 36403cf..38d0d4a 100644
+--- a/thunks/zlib/zlib.cpp
++++ b/thunks/zlib/zlib.cpp
+@@ -35,6 +35,7 @@ ABI_ATTR void *AAssetManager_fromJava_impl(void *env, void *obj)
+ {
+     int err;
+     AAssetManager_impl * asset_mgr = (AAssetManager_impl*)malloc(sizeof(AAssetManager_impl));
++    warning("[AAsset] asset manager for %s\n", gmloader_config.apk_path.c_str());
+ 
+     if ((asset_mgr->apk = zip_open(gmloader_config.apk_path.c_str(), ZIP_RDONLY, &err)) == NULL)
+     {
+@@ -85,6 +86,8 @@ ABI_ATTR void *AAssetManager_open_impl(void *mgr, const char *filename, int mode
+     }
+ 
+     fs::path filename_restored = fs::path("assets") / filename;
++    static int nlog = 0;
++    if (nlog++ < 8) warning("[AAsset] open %s\n", filename_restored.c_str());
+     if ((asset->index = zip_name_locate(asset->mgr->apk, filename_restored.c_str(), ZIP_FL_NOCASE)) == -1)
+     {
+         fatal_error("[AAsset] Cannot locate %s in AAsset archive.\n", filename_restored.c_str());

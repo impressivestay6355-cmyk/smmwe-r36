@@ -1,0 +1,13 @@
+{
+  "save_dir": "saves",
+  "apk_path": "data/smmwe.apk",
+  "show_cursor": false,
+  "disable_controller": false,
+  "disable_depth": true,
+  "disable_extensions": false,
+  "disable_joystick": false,
+  "disable_rumble": false,
+  "disable_texhack": true,
+  "rumble_scale": 1.0,
+  "force_platform": "os_android"
+}

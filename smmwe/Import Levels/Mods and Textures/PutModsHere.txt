@@ -1,0 +1,12 @@
+Put mods here. Subfolders are fine.
+
+Textures (.zip): in the game go to Settings and press the button to import
+textures. The zips in this folder show up in the list.
+
+Music and sounds (.ogg, or a .zip full of .ogg files): they replace the game
+sounds with the same name. They are added when you start the port (about one
+minute, only when something here changed). Delete them to get the original
+sounds back.
+
+Only sounds and textures can be modded. PC mods that change the game itself
+(data.win, .exe, .dll) do not work on this port.

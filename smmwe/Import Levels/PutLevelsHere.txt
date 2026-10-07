@@ -1,0 +1,5 @@
+Put the levels you want to import here (.swe or .zip).
+Mods and textures go in the "Mods and Textures" folder.
+
+In the game, press the "import" button: the files in this folder are listed
+there. Pick one with the D-pad and confirm with A or START.
