@@ -1,8 +1,8 @@
 # SMM: World Engine — R36S port
 
-Port by Impressive Stay. Super Mario Maker: World Engine created by Franyer Farías, developed by the SMM:WE team.
+Port by Impressive Stay. SMM:WE created by Franyer Farías, developed by the SMM:WE team.
 
-SMM:WE is a free fan game inspired by Super Mario Maker. This port brings
+SMM:WE is a free fan-made level maker game. This port brings
 its Android APK to the R36S through PortMaster,
 using [gmloader-next](https://github.com/PortsMaster/gmloader-next).
 Online play, login, an on-screen keyboard and a pointer for the touch menus
